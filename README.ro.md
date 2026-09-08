@@ -193,10 +193,44 @@ omarchy-shell rss cycleLanguage
 - `Model.js` — forma datelor: raportul preluării, lista de surse, articolele
   citite. Eșecurile circulă drept coduri (`http|404`), nu propoziții, ca să
   poată fi traduse la afișare.
-- `bin/rss-preia` — descarcă toate sursele în paralel și scrie un singur JSON pe
-  stdout. Înțelege RSS 2.0 și Atom; ilustrația e luată din `media:thumbnail`,
-  `media:content`, `enclosure` sau, în lipsa lor, din prima imagine a corpului
-  HTML al articolului. Eșecul unei surse ajunge în raport, nu în codul de ieșire.
+- `bin/rss-preia` — descarcă în paralel toate sursele *și toate miniaturile* și
+  scrie un singur JSON pe stdout. Înțelege RSS 2.0 și Atom; ilustrația e luată
+  din `media:thumbnail`, `media:content`, `enclosure` sau, în lipsa lor, din
+  prima imagine a corpului HTML al articolului. Eșecul unei surse ajunge în
+  raport, nu în codul de ieșire.
+
+## Rețea
+
+Widgetul nu deschide el nicio conexiune: tot ce atinge rețeaua trece prin
+`bin/rss-preia`, care aplică aceleași verificări fiecărei cereri și fiecărei
+redirectări de pe drum.
+
+Adresa unei surse o scrii tu, deci primul salt poate merge într-o rețea privată
+— un flux pe NAS-ul din hol e o alegere legitimă. Tot ce urmează e ales de un
+server, nu de tine, și rămâne ținut la internetul public:
+
+- schema trebuie să fie `http` sau `https`, fără parolă în adresă, iar la
+  miniaturi portul trebuie să fie 80 sau 443;
+- gazda se rezolvă o singură dată, i se verifică toate adresele întoarse, iar
+  conexiunea se face apoi chiar la adresa verificată — așa că un nume care
+  răspunde altceva a doua oară (DNS rebinding) nu câștigă nimic. Loopback,
+  link-local (inclusiv `169.254.169.254`), rețelele private, CGNAT, multicast și
+  intervalele rezervate sunt refuzate; peste TLS, SNI și verificarea
+  certificatului rămân pe numele gazdei;
+- cel mult patru redirectări, un plafon de octeți (8 MB pentru o sursă, 2 MB
+  pentru o miniatură) și un singur buget de timp pentru tot lanțul.
+
+Miniaturile se descarcă aici, nu de către `Image` din QML, fiindcă adresele lor
+vin din flux: răspunsul trebuie și să se declare imagine, și să înceapă cu
+semnătura unui JPEG, PNG, GIF sau WebP, înainte să fie scris în
+`~/.cache/omarchy/rss-miniaturi` sub amprenta adresei lui. La widget ajunge
+calea acelui fișier local — niciodată o adresă scrisă de flux. Eșecurile se țin
+minte șase ore, ca o imagine ștearsă de pe site să nu fie recerută la fiecare
+tick, iar cache-ul se curăță la o săptămână sau la 500 de fișiere.
+
+Legăturile articolelor sunt verificate pe aceleași scheme acceptate înainte ca
+`omarchy-launch-browser` să primească vreuna — în script și încă o dată în
+`Model.js`.
 
 ## Cerințe
 

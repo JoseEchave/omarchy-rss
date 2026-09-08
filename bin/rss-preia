@@ -2,6 +2,7 @@
 """Preia știrile din sursele RSS/Atom configurate pentru widget-ul „Știri RSS”.
 
 Utilizare: rss-preia <fișier-surse.json> [maxim-per-sursă] [secunde-timeout]
+                     [miniaturi 0|1]
 
 Ieșirea e mereu un singur obiect JSON pe stdout, ca partea QML să nu trebuiască
 să distingă între „a mers” și „nu a mers”: eșecul unei surse ajunge în cheia
@@ -10,17 +11,27 @@ cheia „eroare” de la rădăcină. Codul de ieșire rămâne 0 în ambele caz
 
 Sursele se preiau în paralel: o sursă lentă nu trebuie să țină pe loc restul,
 fiindcă întreaga rulare stă între două tick-uri ale widget-ului.
+
+Tot ce se descarcă — fluxul și ilustrațiile lui — trece prin `descarca`, care
+verifică schema, portul și adresa IP la fiecare salt și oprește citirea la o
+limită de octeți. Adresele ilustrațiilor vin din flux, adică de la altcineva
+decât utilizatorul, așa că nu ajung niciodată în QML: se descarcă aici, se
+verifică, și mai departe pleacă doar calea fișierului local rezultat.
 """
 
 import concurrent.futures
 import hashlib
 import html
+import http.client
+import ipaddress
 import json
 import os
 import re
+import socket
+import ssl
 import sys
-import urllib.error
-import urllib.request
+import time
+import urllib.parse
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -29,6 +40,22 @@ from email.utils import parsedate_to_datetime
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) omarchy-rss/1.0"
 MAXIM_GLOBAL = 200
 MAXIM_OCTETI = 8 * 1024 * 1024
+MAXIM_REDIRECTARI = 4
+SIGURE_IN_CALE = "/%:@!$&'()*+,;=~-._?[]"
+CONTEXT_TLS = ssl.create_default_context()
+
+# Limitele ilustrațiilor. Sunt mai strânse decât cele ale fluxului fiindcă
+# adresa unei ilustrații o alege fluxul, nu utilizatorul.
+MAXIM_OCTETI_IMAGINE = 2 * 1024 * 1024
+MAXIM_MINIATURI = 60
+PORTURI_WEB = frozenset((80, 443))
+TIPURI_IMAGINE = frozenset((
+    "image/jpeg", "image/pjpeg", "image/png", "image/gif", "image/webp",
+))
+EXTENSII_IMAGINE = ("jpg", "png", "gif", "webp")
+ZILE_CACHE = 7
+MAXIM_FISIERE_CACHE = 500
+ORE_REINCERCARE = 6
 
 ATOM = "{http://www.w3.org/2005/Atom}"
 DC = "{http://purl.org/dc/elements/1.1/}"
@@ -100,6 +127,30 @@ def legatura(element):
             return link.get("href").strip()
 
     return ""
+
+
+def adresa_web(url):
+    """Adresa, dar numai dacă e http(s) și are gazdă; altfel șirul gol.
+
+    Se aplică și legăturilor articolelor, și ilustrațiilor: amândouă vin din
+    flux și amândouă ajung să fie folosite de altcineva — prima de browser,
+    a doua de descărcătorul de mai jos. Reconstruirea din bucăți scoate și
+    caracterele de control pe care `urlsplit` le ignoră, dar un consumator de
+    mai departe nu le-ar ignora.
+    """
+    url = (url or "").strip()
+    if not url:
+        return ""
+
+    try:
+        parti = urllib.parse.urlsplit(url)
+        gazda = parti.hostname
+    except ValueError:
+        return ""
+
+    if parti.scheme.lower() not in ("http", "https") or not gazda:
+        return ""
+    return urllib.parse.urlunsplit(parti)
 
 
 def imagine(element, *corpuri):
@@ -184,13 +235,213 @@ def articole_atom(feed):
         }
 
 
-def descarca(url, timeout):
-    cerere = urllib.request.Request(url, headers={
-        "User-Agent": USER_AGENT,
-        "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
-    })
-    with urllib.request.urlopen(cerere, timeout=timeout) as raspuns:
-        return raspuns.read(MAXIM_OCTETI)
+# --------------------------------------------------------------- rețea
+
+class EroareRetea(Exception):
+    """Eșec de rețea purtând un cod scurt, gata de pus în „eroare”."""
+
+    def __init__(self, cod):
+        super().__init__(cod)
+        self.cod = cod
+
+
+def adresa_publica(ip):
+    """Adevărat doar pentru adrese rutabile pe internet.
+
+    Respinge loopback, link-local, rețelele private, multicast, adresa nulă și
+    intervalele rezervate — adică exact țintele pe care un flux ostil ar vrea
+    să ne pună să le cerem în locul lui, din sesiunea utilizatorului.
+    """
+    try:
+        adresa = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+
+    # O adresă IPv6 care împachetează una IPv4 (::ffff:127.0.0.1) se judecă
+    # după adresa dinăuntru, altfel ocolirea e gratis.
+    if adresa.version == 6 and adresa.ipv4_mapped is not None:
+        adresa = adresa.ipv4_mapped
+
+    if adresa.is_loopback or adresa.is_link_local or adresa.is_private:
+        return False
+    if adresa.is_multicast or adresa.is_reserved or adresa.is_unspecified:
+        return False
+    return adresa.is_global
+
+
+def rezolva(gazda, port, permite_privat):
+    """Adresa la care ne conectăm, verificată înainte, nu după.
+
+    Verificarea se face o singură dată, aici, iar conexiunea se face apoi
+    direct pe IP-ul verificat: între verificare și conectare nu mai există o a
+    doua interogare DNS care să întoarcă altceva (DNS rebinding). Dacă *vreuna*
+    dintre adresele gazdei e interzisă, cade toată gazda: una care întoarce și
+    o adresă publică, și una de loopback nu e o gazdă de încredere.
+    """
+    try:
+        informatii = socket.getaddrinfo(gazda, port, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        raise EroareRetea("unreachable|dns")
+    except (UnicodeError, ValueError):
+        # getaddrinfo trece el însuși numele prin „idna”, iar un nume cu o
+        # etichetă goală („x..y”) îl face să cadă înainte de orice rezolvare.
+        raise EroareRetea("blocked|malformed-url")
+
+    adrese = []
+    for _familie, _tip, _proto, _nume, capat in informatii:
+        ip = capat[0]
+        if not permite_privat and not adresa_publica(ip):
+            raise EroareRetea("blocked|private-address")
+        adrese.append(ip)
+
+    if not adrese:
+        raise EroareRetea("unreachable|dns")
+    return adrese[0]
+
+
+class ConexiuneFixata(http.client.HTTPConnection):
+    """HTTP către un IP deja verificat, cu antetul Host pe numele gazdei."""
+
+    def __init__(self, ip, gazda, port, timeout):
+        super().__init__(gazda, port, timeout=timeout)
+        self.ip_fixat = ip
+
+    def connect(self):
+        self.sock = socket.create_connection((self.ip_fixat, self.port),
+                                             self.timeout)
+
+
+class ConexiuneFixataTLS(http.client.HTTPSConnection):
+    """La fel, dar peste TLS: conexiunea TCP merge pe IP-ul verificat, în timp
+    ce SNI și verificarea certificatului rămân pe numele gazdei."""
+
+    def __init__(self, ip, gazda, port, timeout, context):
+        super().__init__(gazda, port, timeout=timeout, context=context)
+        self.ip_fixat = ip
+
+    def connect(self):
+        priza = socket.create_connection((self.ip_fixat, self.port),
+                                         self.timeout)
+        self.sock = self._context.wrap_socket(priza, server_hostname=self.host)
+
+
+def descarca(url, timeout, maxim_octeti, accepta, porturi=None, tipuri=None,
+             permite_privat_initial=False):
+    """Descărcare cu toate limitele puse înainte de cerere, nu după răspuns.
+
+    Schema, portul și adresa se verifică la fiecare pas — inclusiv la fiecare
+    redirectare, fiindcă redirectarea o alege serverul, nu noi. Citirea se
+    oprește la `maxim_octeti`, iar tot lanțul de salturi stă în bugetul
+    `timeout`.
+    """
+    limita_timp = time.monotonic() + timeout
+    curent = url
+
+    for pas in range(MAXIM_REDIRECTARI + 1):
+        ramas = limita_timp - time.monotonic()
+        if ramas <= 0:
+            raise EroareRetea("unreachable|timeout")
+
+        try:
+            parti = urllib.parse.urlsplit(curent)
+            schema = parti.scheme.lower()
+            gazda = parti.hostname
+            port = parti.port or (443 if schema == "https" else 80)
+        except ValueError:
+            raise EroareRetea("blocked|malformed-url")
+
+        if schema not in ("http", "https"):
+            raise EroareRetea("blocked|scheme")
+        if parti.username or parti.password:
+            raise EroareRetea("blocked|credentials-in-url")
+        if not gazda:
+            raise EroareRetea("blocked|malformed-url")
+
+        # Un nume cu diacritice (händler.de) trebuie trecut în punycode: nici
+        # getaddrinfo nu-l rezolvă altfel, nici antetul Host nu-l poate purta.
+        if not gazda.isascii():
+            try:
+                gazda = gazda.encode("idna").decode("ascii")
+            except (UnicodeError, ValueError):
+                raise EroareRetea("blocked|malformed-url")
+        if porturi is not None and port not in porturi:
+            raise EroareRetea("blocked|port")
+
+        # Doar primul salt poate merge într-o rețea privată, și numai când
+        # adresa e scrisă de utilizator (un flux pe NAS-ul din casă e o alegere
+        # legitimă). Tot ce urmează vine de la server, deci nu mai are voie.
+        ip = rezolva(gazda, port, permite_privat_initial and pas == 0)
+
+        # Ținta cererii se compune de mână: `urlunsplit` ar pune încă un „//”
+        # în fața unei căi care începe deja cu „//”, ca să n-o confunde cu o
+        # gazdă, și linia de cerere ar ieși stricată.
+        cale = parti.path or "/"
+        if not cale.startswith("/"):
+            cale = "/" + cale
+        if parti.query:
+            cale += "?" + parti.query
+        # Linia de cerere trebuie să fie ASCII, iar fluxurile scriu adesea
+        # adresa cu diacritice, neîncodată. `%` e lăsat în „safe” ca secvențele
+        # deja încodate să nu fie încodate a doua oară.
+        cale = urllib.parse.quote(cale, safe=SIGURE_IN_CALE)
+        antete = {
+            "User-Agent": USER_AGENT,
+            "Accept": accepta,
+            # Fără compresie: altfel limita de octeți s-ar aplica pe fluxul
+            # comprimat, iar ce se decomprimă din el ar putea fi oricât.
+            "Accept-Encoding": "identity",
+            "Connection": "close",
+        }
+
+        if schema == "https":
+            conexiune = ConexiuneFixataTLS(ip, gazda, port, ramas, CONTEXT_TLS)
+        else:
+            conexiune = ConexiuneFixata(ip, gazda, port, ramas)
+
+        try:
+            conexiune.request("GET", cale, headers=antete)
+            raspuns = conexiune.getresponse()
+
+            if raspuns.status in (301, 302, 303, 307, 308):
+                locatie = (raspuns.getheader("Location") or "").strip()
+                if not locatie:
+                    raise EroareRetea("http|%d" % raspuns.status)
+                curent = urllib.parse.urljoin(curent, locatie)
+                continue
+
+            if raspuns.status != 200:
+                raise EroareRetea("http|%d" % raspuns.status)
+
+            tip = (raspuns.getheader("Content-Type") or "").split(";")[0].strip().lower()
+            if tipuri is not None and tip not in tipuri:
+                raise EroareRetea("blocked|type")
+
+            anuntat = raspuns.getheader("Content-Length") or ""
+            if anuntat.isdigit() and int(anuntat) > maxim_octeti:
+                raise EroareRetea("too-large")
+
+            # Un octet peste limită e de-ajuns ca să știm că a depășit-o.
+            date = raspuns.read(maxim_octeti + 1)
+            if len(date) > maxim_octeti:
+                raise EroareRetea("too-large")
+            return date, tip
+        except EroareRetea:
+            raise
+        except (OSError, http.client.HTTPException) as e:
+            raise EroareRetea("unreachable|%s" % type(e).__name__)
+        finally:
+            conexiune.close()
+
+    raise EroareRetea("unreachable|redirects")
+
+
+def descarca_flux(url, timeout):
+    date, _tip = descarca(
+        url, timeout, MAXIM_OCTETI,
+        "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
+        permite_privat_initial=True,
+    )
+    return date
 
 
 def preia_sursa(sursa, maxim, timeout):
@@ -201,14 +452,11 @@ def preia_sursa(sursa, maxim, timeout):
     stiri = []
 
     try:
-        brut = descarca(sursa["url"], timeout)
-    except urllib.error.HTTPError as e:
-        rezultat["eroare"] = "http|%s" % e.code
+        brut = descarca_flux(sursa["url"], timeout)
+    except EroareRetea as e:
+        rezultat["eroare"] = e.cod
         return rezultat, stiri
-    except urllib.error.URLError as e:
-        rezultat["eroare"] = "unreachable|%s" % (getattr(e, "reason", "") or "network")
-        return rezultat, stiri
-    except Exception as e:  # timeout de socket, TLS, redirect rupt
+    except Exception as e:  # ceva neprevăzut, tot nu are voie să oprească restul
         rezultat["eroare"] = type(e).__name__
         return rezultat, stiri
 
@@ -232,16 +480,21 @@ def preia_sursa(sursa, maxim, timeout):
     nume = sursa["nume"] or rezultat["numeDescoperit"] or sursa["url"]
 
     for articol in sursa_articole:
-        if not articol["titlu"] and not articol["link"]:
+        # Identitatea se calculează pe adresa brută, înainte de filtrare, ca un
+        # articol deja citit să nu redevină necitit dacă îi cade legătura.
+        id_articol = identitate(id_sursa, articol)
+        # Doar http(s) mai departe: un `data:`, un `file:` sau un `javascript:`
+        # din flux nu are ce căuta nici în browserul utilizatorului, nici în
+        # coada de descărcări.
+        link = adresa_web(articol["link"])
+        if not articol["titlu"] and not link:
             continue
         stiri.append({
-            "id": identitate(id_sursa, articol),
-            "titlu": articol["titlu"] or articol["link"],
-            "link": articol["link"],
+            "id": id_articol,
+            "titlu": articol["titlu"] or link,
+            "link": link,
             "rezumat": articol["rezumat"],
-            # Doar http(s): un `data:` uriaș sau un `file:` din flux nu are ce
-            # căuta în JSON-ul pe care îl trecem mai departe la QML.
-            "imagine": articol["imagine"] if articol["imagine"].lower().startswith(("http://", "https://")) else "",
+            "imagine": adresa_web(articol["imagine"]),
             "data": articol["data"],
             "sursaId": id_sursa,
             "sursa": nume,
@@ -251,6 +504,150 @@ def preia_sursa(sursa, maxim, timeout):
 
     rezultat["numar"] = len(stiri)
     return rezultat, stiri
+
+
+# ----------------------------------------------------------- miniaturile
+
+
+def dosar_miniaturi():
+    baza = os.environ.get("XDG_CACHE_HOME") or os.path.join(
+        os.path.expanduser("~"), ".cache")
+    return os.path.join(baza, "omarchy", "rss-miniaturi")
+
+
+def format_imagine(date):
+    """Formatul real al octeților descărcați, nu cel promis de Content-Type.
+
+    Antetul îl scrie serverul; semnătura de la începutul fișierului e ce va
+    citi decodorul din QML. Ce nu e una dintre imaginile de mai jos — un SVG,
+    de pildă, care e XML și poate cere singur alte adrese — nu se salvează.
+    """
+    if date.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if date.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if date.startswith((b"GIF87a", b"GIF89a")):
+        return "gif"
+    if date[:4] == b"RIFF" and date[8:12] == b"WEBP":
+        return "webp"
+    return ""
+
+
+def preia_miniatura(url, dosar, timeout):
+    """Calea locală a ilustrației, sau șirul gol dacă nu s-a putut lua în
+    siguranță. Numele fișierului e amprenta adresei, deci a doua rulare nu mai
+    descarcă nimic pentru un articol pe care l-a văzut deja."""
+    nume = hashlib.sha256(url.encode("utf-8")).hexdigest()[:32]
+
+    for extensie in EXTENSII_IMAGINE:
+        cale = os.path.join(dosar, "%s.%s" % (nume, extensie))
+        if os.path.exists(cale):
+            try:
+                # Data ultimei folosiri, pentru curățarea de mai jos.
+                os.utime(cale, None)
+            except OSError:
+                pass
+            return cale
+
+    # Adresele care au eșuat au un semn propriu, ca o imagine ștearsă de pe
+    # site să nu fie recerută la fiecare tick al widget-ului.
+    cale_esec = os.path.join(dosar, "%s.esec" % nume)
+    try:
+        if time.time() - os.stat(cale_esec).st_mtime < ORE_REINCERCARE * 3600:
+            return ""
+    except OSError:
+        pass
+
+    try:
+        date, _tip = descarca(url, timeout, MAXIM_OCTETI_IMAGINE, "image/*",
+                              porturi=PORTURI_WEB, tipuri=TIPURI_IMAGINE)
+        extensie = format_imagine(date)
+    except Exception:
+        # O ilustrație lipsă e o casetă goală; nu are voie să fie mai mult.
+        extensie = ""
+
+    if not extensie:
+        scrie_fisier(cale_esec, b"")
+        return ""
+
+    cale = os.path.join(dosar, "%s.%s" % (nume, extensie))
+    return cale if scrie_fisier(cale, date) else ""
+
+
+def scrie_fisier(cale, date):
+    """Scriere atomică: două rulări paralele pot cădea pe aceeași adresă."""
+    temporar = "%s.%d.tmp" % (cale, os.getpid())
+    try:
+        with open(temporar, "wb") as f:
+            f.write(date)
+        os.replace(temporar, cale)
+        return True
+    except OSError:
+        try:
+            os.unlink(temporar)
+        except OSError:
+            pass
+        return False
+
+
+def curata_miniaturile(dosar):
+    """Cache-ul nu are voie să crească la nesfârșit: ce nu s-a mai folosit de
+    o săptămână, și tot ce trece peste plafon, se șterge."""
+    intrari = []
+    try:
+        for nume in os.listdir(dosar):
+            cale = os.path.join(dosar, nume)
+            try:
+                intrari.append((os.stat(cale).st_mtime, cale))
+            except OSError:
+                continue
+    except OSError:
+        return
+
+    limita = time.time() - ZILE_CACHE * 86400
+    intrari.sort(reverse=True)
+    for indice, (folosit, cale) in enumerate(intrari):
+        if folosit < limita or indice >= MAXIM_FISIERE_CACHE:
+            try:
+                os.unlink(cale)
+            except OSError:
+                pass
+
+
+def adauga_miniaturi(stiri, timeout):
+    """Înlocuiește adresele ilustrațiilor cu fișierele locale descărcate.
+
+    Ce nu se descarcă rămâne cu șirul gol, iar QML afișează rândul fără
+    ilustrație: în JSON-ul care ajunge la widget nu pleacă niciodată o adresă
+    de rețea scrisă de flux.
+    """
+    dosar = dosar_miniaturi()
+    try:
+        os.makedirs(dosar, exist_ok=True)
+    except OSError:
+        for stire in stiri:
+            stire["imagine"] = ""
+        return
+
+    tinte = []
+    for stire in stiri:
+        if stire["imagine"] and len(tinte) < MAXIM_MINIATURI:
+            tinte.append(stire)
+        else:
+            stire["imagine"] = ""
+
+    if tinte:
+        # Un buget mai scurt decât la fluxuri: o ilustrație care întârzie e o
+        # casetă goală, în timp ce un flux care întârzie e un rând lipsă.
+        rabdare = max(3, min(timeout, 6))
+        with concurrent.futures.ThreadPoolExecutor(
+                max_workers=min(8, len(tinte))) as pool:
+            cai = pool.map(
+                lambda s: preia_miniatura(s["imagine"], dosar, rabdare), tinte)
+            for stire, cale in zip(tinte, cai):
+                stire["imagine"] = cale
+
+    curata_miniaturile(dosar)
 
 
 def citeste_surse(cale):
@@ -297,6 +694,7 @@ def main():
     cale_surse = sys.argv[1]
     maxim = max(1, min(100, int(sys.argv[2]) if len(sys.argv) > 2 else 25))
     timeout = max(3, min(60, int(sys.argv[3]) if len(sys.argv) > 3 else 12))
+    miniaturi = (sys.argv[4] if len(sys.argv) > 4 else "1") not in ("0", "false", "")
 
     raport = {
         "actualizatLa": datetime.now().isoformat(timespec="seconds"),
@@ -329,6 +727,12 @@ def main():
     raport["surse"].sort(key=lambda s: [x["id"] for x in surse].index(s["id"]))
     toate.sort(key=lambda a: a["data"], reverse=True)
     raport["stiri"] = toate[:MAXIM_GLOBAL]
+
+    if miniaturi:
+        adauga_miniaturi(raport["stiri"], timeout)
+    else:
+        for stire in raport["stiri"]:
+            stire["imagine"] = ""
 
     print(json.dumps(raport, ensure_ascii=False))
     return 0

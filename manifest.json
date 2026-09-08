@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "mghizdavet.rss",
   "name": "RSS news",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "author": "Marius Ghizdavet",
   "license": "MIT",
   "homepage": "https://github.com/MariusGhizdavet/omarchy-rss",
@@ -120,7 +120,7 @@
         "type": "boolean",
         "label": "Show item thumbnails",
         "defaultValue": true,
-        "description": "The illustration is downloaded from the source site whenever the feed offers one."
+        "description": "The illustration is fetched and checked by the plugin's own helper, then shown from a local cache; the panel itself never contacts the source site."
       },
       {
         "key": "unreadOnly",

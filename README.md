@@ -188,11 +188,44 @@ omarchy-shell rss cycleLanguage
 - `Model.js` — the shape of the data: the fetch report, the feed list, the read
   items. Failures travel as codes (`http|404`), never as sentences, so they can
   be translated at the point of display.
-- `bin/rss-preia` — downloads every feed in parallel and writes a single JSON
-  document to stdout. Understands RSS 2.0 and Atom; the illustration comes from
-  `media:thumbnail`, `media:content`, `enclosure` or, failing those, the first
-  image in the article's HTML body. A feed's failure lands in the report, not in
-  the exit code.
+- `bin/rss-preia` — downloads every feed *and every thumbnail* in parallel and
+  writes a single JSON document to stdout. Understands RSS 2.0 and Atom; the
+  illustration comes from `media:thumbnail`, `media:content`, `enclosure` or,
+  failing those, the first image in the article's HTML body. A feed's failure
+  lands in the report, not in the exit code.
+
+## Network
+
+The widget itself never opens a connection: everything that touches the network
+goes through `bin/rss-preia`, which applies the same checks to every request and
+to every redirect along the way.
+
+A feed's address is written by you, so the first hop may point at a private
+network — a feed on the NAS in the hall is a legitimate choice. Everything after
+that is chosen by a server rather than by you, and is held to the public
+internet only:
+
+- the scheme must be `http` or `https`, with no credentials in the URL, and for
+  thumbnails the port must be 80 or 443;
+- the host is resolved once, every address it returns is checked, and the
+  connection is then made to that verified address — so a name that answers
+  differently the second time around (DNS rebinding) gains nothing. Loopback,
+  link-local (including `169.254.169.254`), private, CGNAT, multicast and
+  reserved ranges are refused; over TLS, SNI and certificate validation still
+  use the host name;
+- at most four redirects, a byte ceiling (8 MB for a feed, 2 MB for a
+  thumbnail), and one time budget for the whole chain.
+
+Thumbnails are downloaded here rather than by QML's `Image`, because their
+addresses come from the feed: the reply has to be declared an image, *and* start
+with the signature of a JPEG, PNG, GIF or WebP, before it is written to
+`~/.cache/omarchy/rss-miniaturi` under the fingerprint of its address. What
+reaches the widget is the path of that local file — never an address the feed
+wrote. Failures are remembered for six hours so a deleted image is not asked for
+again on every tick, and the cache is pruned at a week or 500 files.
+
+Article links are checked against the same accepted schemes before
+`omarchy-launch-browser` is given one, in the script and again in `Model.js`.
 
 ## Requirements
 

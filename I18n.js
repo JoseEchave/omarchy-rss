@@ -225,6 +225,8 @@ var TEXTE = {
     errUnreachable: "Not responding ({detail})",
     errBadXml: "Invalid XML",
     errNotFeed: "Not RSS or Atom",
+    errBlocked: "Refused for safety ({detail})",
+    errTooLarge: "Response too large",
     errNetwork: "network"
   },
 
@@ -282,6 +284,8 @@ var TEXTE = {
     errUnreachable: "Nu răspunde ({detail})",
     errBadXml: "XML invalid",
     errNotFeed: "Nu e RSS sau Atom",
+    errBlocked: "Refuzat din siguranță ({detail})",
+    errTooLarge: "Răspuns prea mare",
     errNetwork: "rețea"
   },
 
@@ -339,6 +343,8 @@ var TEXTE = {
     errUnreachable: "Antwortet nicht ({detail})",
     errBadXml: "Ungültiges XML",
     errNotFeed: "Kein RSS oder Atom",
+    errBlocked: "Aus Sicherheitsgründen abgelehnt ({detail})",
+    errTooLarge: "Antwort zu groß",
     errNetwork: "Netzwerk"
   },
 
@@ -396,6 +402,8 @@ var TEXTE = {
     errUnreachable: "Ne répond pas ({detail})",
     errBadXml: "XML invalide",
     errNotFeed: "Ni RSS ni Atom",
+    errBlocked: "Refusé par sécurité ({detail})",
+    errTooLarge: "Réponse trop volumineuse",
     errNetwork: "réseau"
   },
 
@@ -453,6 +461,8 @@ var TEXTE = {
     errUnreachable: "No responde ({detail})",
     errBadXml: "XML inválido",
     errNotFeed: "No es RSS ni Atom",
+    errBlocked: "Rechazado por seguridad ({detail})",
+    errTooLarge: "Respuesta demasiado grande",
     errNetwork: "red"
   },
 
@@ -510,6 +520,8 @@ var TEXTE = {
     errUnreachable: "Non risponde ({detail})",
     errBadXml: "XML non valido",
     errNotFeed: "Non è RSS né Atom",
+    errBlocked: "Rifiutato per sicurezza ({detail})",
+    errTooLarge: "Risposta troppo grande",
     errNetwork: "rete"
   },
 
@@ -567,6 +579,8 @@ var TEXTE = {
     errUnreachable: "Não responde ({detail})",
     errBadXml: "XML inválido",
     errNotFeed: "Não é RSS nem Atom",
+    errBlocked: "Recusado por segurança ({detail})",
+    errTooLarge: "Resposta grande demais",
     errNetwork: "rede"
   },
 
@@ -624,6 +638,8 @@ var TEXTE = {
     errUnreachable: "Nie odpowiada ({detail})",
     errBadXml: "Nieprawidłowy XML",
     errNotFeed: "To nie RSS ani Atom",
+    errBlocked: "Odrzucone ze względów bezpieczeństwa ({detail})",
+    errTooLarge: "Odpowiedź zbyt duża",
     errNetwork: "sieć"
   },
 
@@ -681,6 +697,8 @@ var TEXTE = {
     errUnreachable: "Не отвечает ({detail})",
     errBadXml: "Некорректный XML",
     errNotFeed: "Это не RSS и не Atom",
+    errBlocked: "Отклонено из соображений безопасности ({detail})",
+    errTooLarge: "Слишком большой ответ",
     errNetwork: "сеть"
   },
 
@@ -738,6 +756,8 @@ var TEXTE = {
     errUnreachable: "无响应（{detail}）",
     errBadXml: "XML 无效",
     errNotFeed: "不是 RSS 或 Atom",
+    errBlocked: "出于安全考虑已拒绝（{detail}）",
+    errTooLarge: "响应过大",
     errNetwork: "网络"
   }
 }
@@ -810,7 +830,9 @@ var ERORI = {
   "http": "errHttp",
   "unreachable": "errUnreachable",
   "bad-xml": "errBadXml",
-  "not-feed": "errNotFeed"
+  "not-feed": "errNotFeed",
+  "blocked": "errBlocked",
+  "too-large": "errTooLarge"
 }
 
 function textEroare(cod, codLimbii) {

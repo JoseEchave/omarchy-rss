@@ -14,6 +14,31 @@ function raportGol() {
   }
 }
 
+// Adresa unui articol, dar numai dacă e http(s). Scriptul filtrează deja, iar
+// aici se filtrează a doua oară: valoarea asta ajunge argument pentru
+// omarchy-launch-browser, iar un „javascript:" sau un „file:" strecurat într-un
+// raport vechi de pe disc nu are ce căuta acolo.
+function linkWeb(brut) {
+  var url = String(brut || "").trim()
+  return /^https?:\/\/[^\/?#]/i.test(url) ? url : ""
+}
+
+// Ilustrațiile nu mai sunt adrese de rețea, ci fișiere descărcate și verificate
+// de bin/rss-preia; din raport se acceptă doar o cale absolută.
+function caleLocala(brut) {
+  var cale = String(brut || "")
+  return cale.charAt(0) === "/" ? cale : ""
+}
+
+// Adresa cu care se hrănește un Image din QML. Numele fișierului e o amprentă
+// hexazecimală, dar dosarul de acasă poate conține spații sau diacritice.
+function urlFisier(cale) {
+  if (caleLocala(cale) === "") {
+    return ""
+  }
+  return "file://" + encodeURI(cale).replace(/#/g, "%23").replace(/\?/g, "%3F")
+}
+
 // Extrage obiectul JSON din ieșirea scriptului. Un avertisment scris de Python
 // pe stdout ar strica JSON.parse pe tot textul, deci luăm doar de la prima
 // acoladă până la ultima.
@@ -62,9 +87,9 @@ function parseazaRaport(brut) {
     raport.stiri.push({
       id: String(stiri[j].id || ""),
       titlu: String(stiri[j].titlu || ""),
-      link: String(stiri[j].link || ""),
+      link: linkWeb(stiri[j].link),
       rezumat: String(stiri[j].rezumat || ""),
-      imagine: String(stiri[j].imagine || ""),
+      imagine: caleLocala(stiri[j].imagine),
       data: Number(stiri[j].data) || 0,
       sursaId: String(stiri[j].sursaId || ""),
       sursa: String(stiri[j].sursa || "")

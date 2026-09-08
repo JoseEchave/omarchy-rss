@@ -12,8 +12,11 @@ import "I18n.js" as I18n
 // configurate — și un panou cu lista lor. Panoul are două vederi: știrile și
 // administrarea surselor (adaugă / șterge), comutate din butonul cu rotița.
 //
-// Widget-ul nu vorbește el cu rețeaua: bin/rss-preia descarcă toate sursele în
-// paralel și scrie un singur JSON. Starea trăiește în două fișiere —
+// Widget-ul nu vorbește el cu rețeaua — nici măcar pentru ilustrații:
+// bin/rss-preia descarcă în paralel sursele *și* miniaturile, verifică fiecare
+// adresă înainte de cerere și scrie un singur JSON în care ilustrația e deja un
+// fișier local. Așa, o adresă scrisă de un flux ostil nu poate deveni o cerere
+// pornită din sesiunea utilizatorului. Starea trăiește în două fișiere —
 // ~/.config/omarchy/rss/surse.json (sursele, editabil și de mână) și
 // ~/.local/state/omarchy/rss.json (articolele deja citite).
 //
@@ -257,16 +260,20 @@ Panel {
 
     root.sePreia = true
     proces.command = ["python3", root.caleScript, root.caleSurse,
-                      String(root.maximPerSursa), String(root.timeoutSec)]
+                      String(root.maximPerSursa), String(root.timeoutSec),
+                      root.arataImagini ? "1" : "0"]
     proces.running = true
   }
 
   function deschide(stire) {
-    if (!stire || !stire.link) {
+    // A doua verificare a schemei, după cea din script: aici se naște o linie de
+    // comandă, iar singurul lucru care are voie să ajungă în ea e o adresă web.
+    var link = stire ? Model.linkWeb(stire.link) : ""
+    if (link === "") {
       return
     }
 
-    Util.execArgv(["omarchy-launch-browser", stire.link])
+    Util.execArgv(["omarchy-launch-browser", link])
     root.marcheazaCitit(stire.id)
   }
 
@@ -540,6 +547,10 @@ Panel {
   // Ai pus laptopul în priză: cel mai probabil tocmai te-ai așezat la el, deci
   // nu are rost să aștepți primul tick al cadenței rapide.
   onPeReteaChanged: if (peRetea) root.actualizeaza()
+
+  // Miniaturile se aduc la preluare, nu la afișare, deci aprinderea lor cere o
+  // preluare nouă; altfel casetele ar rămâne goale până la următorul tick.
+  onArataImaginiChanged: if (arataImagini) root.actualizeaza()
 
   // Cât timp panoul e deschis, vârstele afișate se împrospătează singure.
   Timer {
@@ -1190,10 +1201,11 @@ Panel {
         font.pixelSize: Style.font.caption
       }
 
-      // Ilustrația articolului, când fluxul o dă. Se descarcă asincron, cu
-      // sourceSize ca decodarea să nu țină în memorie un JPEG de 4000px pentru
-      // o casetă de 72; până sosește (sau dacă nu sosește deloc) rămâne o
-      // suprafață goală de aceeași dimensiune, ca lista să nu tresară.
+      // Ilustrația articolului, când fluxul o dă. E un fișier local, adus și
+      // verificat de bin/rss-preia, deci `Image` nu deschide nicio conexiune;
+      // sourceSize rămâne ca decodarea să nu țină în memorie un JPEG de 4000px
+      // pentru o casetă de 72. Cât timp lipsește, rămâne o suprafață goală de
+      // aceeași dimensiune, ca lista să nu tresară.
       Rectangle {
         id: miniatura
         visible: root.arataImagini && rand.stire.imagine !== ""
@@ -1208,7 +1220,7 @@ Panel {
 
         Image {
           anchors.fill: parent
-          source: miniatura.visible ? rand.stire.imagine : ""
+          source: miniatura.visible ? Model.urlFisier(rand.stire.imagine) : ""
           asynchronous: true
           cache: true
           fillMode: Image.PreserveAspectCrop
