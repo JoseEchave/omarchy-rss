@@ -1,0 +1,209 @@
+# RSS news
+
+An RSS reader for the Omarchy bar. The bar carries an icon with the number of
+unread items; the panel lists them — full titles, and the article's illustration
+when the feed offers one — and, on a second view, feed management.
+
+<img src="docs/bar.png" alt="The widget in the bar: the RSS glyph and the unread count" width="104">
+
+<img src="docs/panel.png" alt="The panel listing unread items from three feeds, each with title, source and age" width="550">
+
+The interface speaks 10 languages and follows your system locale by default.
+
+## What it does
+
+- counts the unread items across every configured feed;
+- lists items from all feeds in one stream, ordered by date;
+- opens an item in your default browser and marks it read;
+- marks everything read from a single button;
+- adds and removes feeds from the panel, without editing files.
+
+## Install
+
+```bash
+omarchy plugin add https://github.com/MariusGhizdavet/omarchy-rss.git
+omarchy plugin enable mghizdavet.rss
+```
+
+`omarchy plugin add` clones the repo into `~/.config/omarchy/plugins/mghizdavet.rss/`
+and leaves it disabled so you can read the code first; `enable` drops the widget
+into the bar's right section. `omarchy bar move mghizdavet.rss <section>` puts it
+somewhere else.
+
+Updating is a fast-forward pull of that checkout, with a diff to review first:
+
+```bash
+omarchy plugin update mghizdavet.rss
+```
+
+## Remove
+
+```bash
+omarchy plugin remove mghizdavet.rss
+```
+
+That removes the widget from the bar and deletes the checkout. The plugin writes
+in exactly two places outside its own folder, and neither is touched by removal,
+so uninstalling never loses your feed list:
+
+```bash
+rm -rf ~/.config/omarchy/rss        # your feed list
+rm -f  ~/.local/state/omarchy/rss.json   # which items you have read
+```
+
+Nothing else in your configuration is written. The one line the plugin adds to
+`~/.config/omarchy/shell.json` is its own bar entry, put there by
+`omarchy plugin enable` and taken out by `remove`; the language picker rewrites
+only that entry's `language` key, through the shell's own `setBarWidget` call.
+
+## Interactions
+
+| Where | Gesture | Effect |
+|---|---|---|
+| bar | left click | open / close the panel |
+| bar | right click | reload now |
+| bar | middle click | mark everything read |
+| panel | click an item | open it in the browser and mark it read |
+| panel | right click an item | toggle read / unread |
+| panel | `j` / `k`, arrows | move the cursor through the list |
+| panel | `Enter` / `Space` | open the item under the cursor |
+| panel | `x` | mark read (in the feed view: remove the feed) |
+| panel | `g` or `Home` | jump to the first item |
+| panel | `a` | mark everything read |
+| panel | `r` | reload |
+| panel | `s` | switch between items and feeds |
+| panel | `L` | switch to the next language |
+| feeds | `n` | move the cursor into the add field |
+| feeds | `Enter` in the field | add the feed; `Esc` hands the keys back to the list |
+
+## Settings
+
+Edited in the widget's entry in `~/.config/omarchy/shell.json`.
+
+| Key | Default | What it does |
+|---|---|---|
+| `language` | `Auto` | interface language — see below |
+| `refreshIntervalSec` | `120` | how often feeds are fetched on mains power |
+| `refreshIntervalOnBatterySec` | `600` | the same cadence, while running on battery |
+| `maxItemsPerFeed` | `25` | how many items are taken from each feed |
+| `maxItemsShown` | `40` | how many items go into the panel |
+| `timeoutSec` | `12` | how long to wait on one feed |
+| `showCount` | `true` | the number next to the bar icon |
+| `showThumbnails` | `true` | the article thumbnail |
+| `unreadOnly` | `false` | hide items already read |
+| `markAllReadOnClose` | `false` | mark everything read when the panel closes |
+
+The cadence follows the power source (`UPower.onBattery`): on mains power feeds
+are fetched often, on battery more rarely, and the moment you plug the charger
+in a fetch happens immediately rather than waiting for the tick. A desktop,
+having no battery, stays on the mains cadence forever.
+
+## Languages
+
+`language` accepts `Auto` — which follows the system locale and falls back to
+English when that locale is not translated — or one of:
+
+| | | |
+|---|---|---|
+| `English` | `Română` | `Deutsch` |
+| `Français` | `Español` | `Italiano` |
+| `Português (BR)` | `Polski` | `Русский` |
+| `中文 (简体)` | | |
+
+The language is picked from the panel itself — press `s` for the feed view, or
+click the gear — and `L` cycles to the next one without the mouse:
+
+<img src="docs/feeds.png" alt="The feed view: the configured feeds, the add field, and the language picker" width="550">
+
+The plain language code works too, so `"language": "de"` is the same as
+`"language": "Deutsch"`. Dates and plural forms follow the chosen language, not
+the system one — Romanian gets `1 știre / 2 știri / 20 de știri`, Russian and
+Polish get their three forms, and the month names in older items are written in
+the selected language.
+
+Output from the IPC commands below stays in English whatever the interface
+language is, so scripts that parse it do not depend on a setting.
+
+### Adding a language
+
+Every string lives in `I18n.js`, in one table per language. Copy the `"en"`
+block, translate the values, and add an entry to `LIMBI` at the top of the file
+(code, display name, locale for date formatting, and the spellings that should
+resolve to it) plus the display name to the `language` options in
+`manifest.json`. If a plural needs more or fewer than two forms, `indexPlural`
+is where the rule goes. Missing keys fall back to English, so a partial
+translation never shows raw keys on screen.
+
+## Feeds
+
+On the very first run — when that file does not exist yet — the widget seeds one
+international feed, **BBC News World**, so the panel has something to show
+instead of asking for an address first. It is written once, on the file's
+absence: once the file exists, an empty list stays empty, so removing every feed
+sticks.
+
+Feeds live in `~/.config/omarchy/rss/surse.json` and can also be edited by
+hand — the file is watched, so changes apply without restarting the shell. A
+missing name is filled in from the feed's own title on the first successful
+fetch.
+
+```json
+{
+  "version": 1,
+  "surse": [
+    { "id": "biziday-ro", "nume": "Biziday", "url": "https://www.biziday.ro/feed/" }
+  ]
+}
+```
+
+`feeds` and `name` are accepted as synonyms for `surse` and `nume` when reading,
+so either spelling works in a hand-written file.
+
+Items already read are kept separately, in `~/.local/state/omarchy/rss.json`, as
+regenerable state: entries older than 90 days clean themselves up.
+
+## From the command line
+
+```bash
+omarchy-shell rss toggle
+omarchy-shell rss unread
+omarchy-shell rss status
+omarchy-shell rss refresh
+omarchy-shell rss markAllRead
+omarchy-shell rss top
+omarchy-shell rss listFeeds
+omarchy-shell rss addFeed https://example.com/feed
+omarchy-shell rss removeFeed example-com
+omarchy-shell rss language
+omarchy-shell rss setLanguage Deutsch
+omarchy-shell rss cycleLanguage
+```
+
+## How it is built
+
+- `Panel.qml` — the bar widget and the panel (the two views, navigation, state).
+  Contains no visible text; every label comes from `I18n.js`, by key.
+- `I18n.js` — the translations, the language resolution, the plural rules, and
+  the sentences assembled from more than one piece.
+- `Model.js` — the shape of the data: the fetch report, the feed list, the read
+  items. Failures travel as codes (`http|404`), never as sentences, so they can
+  be translated at the point of display.
+- `bin/rss-preia` — downloads every feed in parallel and writes a single JSON
+  document to stdout. Understands RSS 2.0 and Atom; the illustration comes from
+  `media:thumbnail`, `media:content`, `enclosure` or, failing those, the first
+  image in the article's HTML body. A feed's failure lands in the report, not in
+  the exit code.
+
+## Requirements
+
+`python3` (standard library only) and `omarchy-launch-browser`.
+
+## Compatibility
+
+The setting keys were English-ified in 1.1.0. The earlier Romanian names
+(`intervalPeReteaSec`, `arataNumarul`, and the rest) are still read, so a
+`shell.json` written against 1.0.0 keeps its configuration.
+
+## License
+
+MIT.

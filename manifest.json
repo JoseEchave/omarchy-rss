@@ -1,0 +1,141 @@
+{
+  "schemaVersion": 1,
+  "id": "mghizdavet.rss",
+  "name": "RSS news",
+  "version": "1.1.0",
+  "author": "Marius Ghizdavet",
+  "license": "MIT",
+  "homepage": "https://github.com/MariusGhizdavet/omarchy-rss",
+  "repository": "https://github.com/MariusGhizdavet/omarchy-rss.git",
+  "description": "An RSS reader in the Omarchy bar: the unread count, the items in a panel, mark-all-read, and feed management. Speaks 10 languages, following the system locale by default.",
+  "keywords": [
+    "rss",
+    "atom",
+    "news",
+    "feed",
+    "reader"
+  ],
+  "kinds": [
+    "bar-widget"
+  ],
+  "activation": "on-demand",
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "RSS news",
+    "description": "Unread items from the RSS feeds you configure, each with its title, source and age.",
+    "category": "News",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "language": "Auto",
+      "refreshIntervalSec": 120,
+      "refreshIntervalOnBatterySec": 600,
+      "maxItemsPerFeed": 25,
+      "maxItemsShown": 40,
+      "timeoutSec": 12,
+      "showCount": true,
+      "showThumbnails": true,
+      "unreadOnly": false,
+      "markAllReadOnClose": false
+    },
+    "schema": [
+      {
+        "key": "language",
+        "type": "enum",
+        "label": "Language",
+        "options": [
+          "Auto",
+          "English",
+          "Română",
+          "Deutsch",
+          "Français",
+          "Español",
+          "Italiano",
+          "Português (BR)",
+          "Polski",
+          "Русский",
+          "中文 (简体)"
+        ],
+        "defaultValue": "Auto",
+        "description": "Auto follows the system locale and falls back to English when it is not one of the translated languages."
+      },
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval on mains power (seconds)",
+        "min": 60,
+        "max": 7200,
+        "step": 30,
+        "defaultValue": 120,
+        "description": "The cadence used while the laptop runs on mains power — and always, on a desktop."
+      },
+      {
+        "key": "refreshIntervalOnBatterySec",
+        "type": "integer",
+        "label": "Refresh interval on battery (seconds)",
+        "min": 60,
+        "max": 7200,
+        "step": 60,
+        "defaultValue": 600,
+        "description": "Every refresh downloads every feed, so a slower cadence is worth it on battery."
+      },
+      {
+        "key": "maxItemsPerFeed",
+        "type": "integer",
+        "label": "Items fetched from each feed",
+        "min": 5,
+        "max": 100,
+        "step": 5,
+        "defaultValue": 25
+      },
+      {
+        "key": "maxItemsShown",
+        "type": "integer",
+        "label": "Items shown in the panel",
+        "min": 10,
+        "max": 200,
+        "step": 10,
+        "defaultValue": 40
+      },
+      {
+        "key": "timeoutSec",
+        "type": "integer",
+        "label": "Timeout per feed (seconds)",
+        "min": 3,
+        "max": 60,
+        "step": 1,
+        "defaultValue": 12
+      },
+      {
+        "key": "showCount",
+        "type": "boolean",
+        "label": "Show the count in the bar",
+        "defaultValue": true,
+        "description": "Turned off, the bar keeps only the icon."
+      },
+      {
+        "key": "showThumbnails",
+        "type": "boolean",
+        "label": "Show item thumbnails",
+        "defaultValue": true,
+        "description": "The illustration is downloaded from the source site whenever the feed offers one."
+      },
+      {
+        "key": "unreadOnly",
+        "type": "boolean",
+        "label": "Show unread items only",
+        "defaultValue": false,
+        "description": "Turned off, read items stay in the list, dimmed."
+      },
+      {
+        "key": "markAllReadOnClose",
+        "type": "boolean",
+        "label": "Mark everything read when the panel closes",
+        "defaultValue": false,
+        "description": "On close, not on open, so the count does not drop to zero before you have seen what was new."
+      }
+    ]
+  }
+}

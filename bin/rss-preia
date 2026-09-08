@@ -1,0 +1,338 @@
+#!/usr/bin/env python3
+"""Preia știrile din sursele RSS/Atom configurate pentru widget-ul „Știri RSS”.
+
+Utilizare: rss-preia <fișier-surse.json> [maxim-per-sursă] [secunde-timeout]
+
+Ieșirea e mereu un singur obiect JSON pe stdout, ca partea QML să nu trebuiască
+să distingă între „a mers” și „nu a mers”: eșecul unei surse ajunge în cheia
+„eroare” a sursei respective, iar un eșec global (fișier de surse ilizibil) în
+cheia „eroare” de la rădăcină. Codul de ieșire rămâne 0 în ambele cazuri.
+
+Sursele se preiau în paralel: o sursă lentă nu trebuie să țină pe loc restul,
+fiindcă întreaga rulare stă între două tick-uri ale widget-ului.
+"""
+
+import concurrent.futures
+import hashlib
+import html
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.request
+import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+
+# Câteva site-uri de știri răspund cu 403 la user-agentul implicit al urllib.
+USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) omarchy-rss/1.0"
+MAXIM_GLOBAL = 200
+MAXIM_OCTETI = 8 * 1024 * 1024
+
+ATOM = "{http://www.w3.org/2005/Atom}"
+DC = "{http://purl.org/dc/elements/1.1/}"
+MEDIA = "{http://search.yahoo.com/mrss/}"
+CONTENT = "{http://purl.org/rss/1.0/modules/content/}"
+
+ETICHETE_HTML = re.compile(r"<[^>]+>")
+SPATII = re.compile(r"\s+")
+# Prima imagine dintr-un corp HTML. `src` e luat înaintea lui `srcset`, ca să
+# nu culegem lista de variante ca pe o singură adresă.
+IMG_HTML = re.compile(r"<img\b[^>]*?\bsrc\s*=\s*[\"']([^\"']+)[\"']", re.I)
+
+
+def curata(text, limita=240):
+    """Text simplu dintr-un fragment care poate conține HTML și entități."""
+    if not text:
+        return ""
+    text = ETICHETE_HTML.sub(" ", str(text))
+    text = html.unescape(text)
+    text = SPATII.sub(" ", text).strip()
+    return text[:limita].rstrip() if len(text) > limita else text
+
+
+def moment(text):
+    """Epoch în secunde dintr-o dată RFC 822 (RSS) sau ISO 8601 (Atom)."""
+    text = (text or "").strip()
+    if not text:
+        return 0
+
+    try:
+        return int(parsedate_to_datetime(text).timestamp())
+    except (TypeError, ValueError, OverflowError):
+        pass
+
+    try:
+        # fromisoformat nu acceptă „Z” înainte de Python 3.11.
+        curatat = text[:-1] + "+00:00" if text.endswith("Z") else text
+        parsat = datetime.fromisoformat(curatat)
+        if parsat.tzinfo is None:
+            parsat = parsat.replace(tzinfo=timezone.utc)
+        return int(parsat.timestamp())
+    except ValueError:
+        return 0
+
+
+def prima_valoare(element, *cai):
+    for cale in cai:
+        gasit = element.find(cale)
+        if gasit is not None:
+            valoare = (gasit.text or "").strip()
+            if valoare:
+                return valoare
+    return ""
+
+
+def legatura(element):
+    """Adresa articolului: <link> pentru RSS, <link href> pentru Atom."""
+    brut = prima_valoare(element, "link", f"{ATOM}link")
+    if brut:
+        return brut
+
+    for link in element.findall(f"{ATOM}link"):
+        rel = link.get("rel", "alternate")
+        if rel == "alternate" and link.get("href"):
+            return link.get("href").strip()
+
+    for link in element.findall(f"{ATOM}link"):
+        if link.get("href"):
+            return link.get("href").strip()
+
+    return ""
+
+
+def imagine(element, *corpuri):
+    """Adresa ilustrației unui articol, în ordinea în care fluxurile o oferă.
+
+    Cele trei convenții acoperă tot ce se vede în practică: `media:*` (Media
+    RSS), `enclosure` (RSS 2.0 — așa trimit Digi24 și ProTV) și, când fluxul nu
+    declară nimic, prima imagine din corpul HTML al articolului (așa ajunge la
+    noi ilustrația de la Biziday).
+    """
+    for eticheta in (f"{MEDIA}thumbnail", f"{MEDIA}content"):
+        for gasit in element.findall(eticheta):
+            tip = (gasit.get("type") or "") + (gasit.get("medium") or "")
+            url = (gasit.get("url") or "").strip()
+            if url and ("image" in tip or eticheta.endswith("thumbnail") or not tip):
+                return url
+
+    for gasit in element.findall("enclosure"):
+        if (gasit.get("type") or "").startswith("image/"):
+            url = (gasit.get("url") or "").strip()
+            if url:
+                return url
+
+    for corp in corpuri:
+        if not corp:
+            continue
+        potrivire = IMG_HTML.search(corp)
+        if potrivire:
+            return html.unescape(potrivire.group(1)).strip()
+
+    return ""
+
+
+def brut_text(element, *cai):
+    """Textul unei etichete fără curățare — pentru corpurile HTML din care mai
+    întâi extragem imaginea și abia apoi rezumatul."""
+    for cale in cai:
+        gasit = element.find(cale)
+        if gasit is not None and gasit.text:
+            return gasit.text
+    return ""
+
+
+def identitate(id_sursa, articol):
+    """Id stabil pentru o știre.
+
+    Cheia preferată e guid-ul, apoi adresa, apoi titlul; e prefixată cu sursa,
+    fiindcă aceeași știre preluată din două surse rămâne două rânduri distincte
+    în listă și trebuie să poată fi marcată citită separat. Rezultatul e un
+    hash scurt, ca fișierul cu articolele citite să nu crească odată cu
+    lungimea adreselor.
+    """
+    cheie = "%s|%s" % (id_sursa, articol["guid"] or articol["link"] or articol["titlu"])
+    return hashlib.sha1(cheie.encode("utf-8")).hexdigest()[:16]
+
+
+def articole_rss(canal):
+    for item in canal.findall("item"):
+        corp = brut_text(item, f"{CONTENT}encoded", "description")
+        yield {
+            # Titlurile se afișează întregi, deci nu le mai tăiem aici; limita
+            # rămâne doar una de siguranță pentru fluxuri patologice.
+            "titlu": curata(prima_valoare(item, "title"), 1000),
+            "link": legatura(item),
+            "guid": prima_valoare(item, "guid"),
+            "data": moment(prima_valoare(item, "pubDate", f"{DC}date")),
+            "rezumat": curata(prima_valoare(item, "description")),
+            "imagine": imagine(item, corp),
+        }
+
+
+def articole_atom(feed):
+    for intrare in feed.findall(f"{ATOM}entry"):
+        corp = brut_text(intrare, f"{ATOM}content", f"{ATOM}summary")
+        yield {
+            "titlu": curata(prima_valoare(intrare, f"{ATOM}title"), 1000),
+            "link": legatura(intrare),
+            "guid": prima_valoare(intrare, f"{ATOM}id"),
+            "data": moment(prima_valoare(intrare, f"{ATOM}updated", f"{ATOM}published")),
+            "rezumat": curata(prima_valoare(intrare, f"{ATOM}summary", f"{ATOM}content")),
+            "imagine": imagine(intrare, corp),
+        }
+
+
+def descarca(url, timeout):
+    cerere = urllib.request.Request(url, headers={
+        "User-Agent": USER_AGENT,
+        "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
+    })
+    with urllib.request.urlopen(cerere, timeout=timeout) as raspuns:
+        return raspuns.read(MAXIM_OCTETI)
+
+
+def preia_sursa(sursa, maxim, timeout):
+    """Rezultatul unei singure surse: numele descoperit, știrile și eroarea."""
+    id_sursa = sursa["id"]
+    rezultat = {"id": id_sursa, "nume": sursa["nume"], "url": sursa["url"],
+                "numeDescoperit": "", "eroare": "", "numar": 0}
+    stiri = []
+
+    try:
+        brut = descarca(sursa["url"], timeout)
+    except urllib.error.HTTPError as e:
+        rezultat["eroare"] = "http|%s" % e.code
+        return rezultat, stiri
+    except urllib.error.URLError as e:
+        rezultat["eroare"] = "unreachable|%s" % (getattr(e, "reason", "") or "network")
+        return rezultat, stiri
+    except Exception as e:  # timeout de socket, TLS, redirect rupt
+        rezultat["eroare"] = type(e).__name__
+        return rezultat, stiri
+
+    try:
+        radacina = ET.fromstring(brut)
+    except ET.ParseError:
+        rezultat["eroare"] = "bad-xml"
+        return rezultat, stiri
+
+    canal = radacina.find("channel")
+    if canal is not None:
+        rezultat["numeDescoperit"] = curata(prima_valoare(canal, "title"), 60)
+        sursa_articole = articole_rss(canal)
+    elif radacina.tag == f"{ATOM}feed":
+        rezultat["numeDescoperit"] = curata(prima_valoare(radacina, f"{ATOM}title"), 60)
+        sursa_articole = articole_atom(radacina)
+    else:
+        rezultat["eroare"] = "not-feed"
+        return rezultat, stiri
+
+    nume = sursa["nume"] or rezultat["numeDescoperit"] or sursa["url"]
+
+    for articol in sursa_articole:
+        if not articol["titlu"] and not articol["link"]:
+            continue
+        stiri.append({
+            "id": identitate(id_sursa, articol),
+            "titlu": articol["titlu"] or articol["link"],
+            "link": articol["link"],
+            "rezumat": articol["rezumat"],
+            # Doar http(s): un `data:` uriaș sau un `file:` din flux nu are ce
+            # căuta în JSON-ul pe care îl trecem mai departe la QML.
+            "imagine": articol["imagine"] if articol["imagine"].lower().startswith(("http://", "https://")) else "",
+            "data": articol["data"],
+            "sursaId": id_sursa,
+            "sursa": nume,
+        })
+        if len(stiri) >= maxim:
+            break
+
+    rezultat["numar"] = len(stiri)
+    return rezultat, stiri
+
+
+def citeste_surse(cale):
+    if not os.path.isfile(cale):
+        return []
+
+    with open(cale, "r", encoding="utf-8") as f:
+        date = json.load(f)
+
+    # „feeds" / „name" sunt acceptate ca sinonime pentru „surse" / „nume", la
+    # fel ca în Model.js: fișierul e scris pe cheile românești, dar cine ajunge
+    # la el prin documentația în engleză scrie firesc în engleză.
+    if isinstance(date, dict):
+        brute = date.get("surse")
+        if brute is None:
+            brute = date.get("feeds")
+    else:
+        brute = date
+    if not isinstance(brute, list):
+        return []
+
+    surse = []
+    for intrare in brute:
+        if isinstance(intrare, str):
+            intrare = {"url": intrare}
+        if not isinstance(intrare, dict):
+            continue
+        url = str(intrare.get("url") or "").strip()
+        if not url:
+            continue
+        surse.append({
+            "id": str(intrare.get("id") or url),
+            "nume": str(intrare.get("nume") or intrare.get("name") or "").strip(),
+            "url": url,
+        })
+    return surse
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(json.dumps({"eroare": "no-feeds-path"}))
+        return 0
+
+    cale_surse = sys.argv[1]
+    maxim = max(1, min(100, int(sys.argv[2]) if len(sys.argv) > 2 else 25))
+    timeout = max(3, min(60, int(sys.argv[3]) if len(sys.argv) > 3 else 12))
+
+    raport = {
+        "actualizatLa": datetime.now().isoformat(timespec="seconds"),
+        "eroare": "",
+        "surse": [],
+        "stiri": [],
+    }
+
+    try:
+        surse = citeste_surse(cale_surse)
+    except (OSError, ValueError) as e:
+        raport["eroare"] = "feeds-unreadable|%s" % type(e).__name__
+        print(json.dumps(raport, ensure_ascii=False))
+        return 0
+
+    if not surse:
+        print(json.dumps(raport, ensure_ascii=False))
+        return 0
+
+    toate = []
+    # Un thread per sursă: munca e aproape numai așteptare după rețea, iar
+    # numărul de surse e de ordinul zecilor.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(surse))) as pool:
+        for stare, stiri in pool.map(lambda s: preia_sursa(s, maxim, timeout), surse):
+            raport["surse"].append(stare)
+            toate.extend(stiri)
+
+    # Ordinea din fișier e ordinea din panoul de surse; lista de știri se
+    # rearanjează după dată, cele fără dată la coadă.
+    raport["surse"].sort(key=lambda s: [x["id"] for x in surse].index(s["id"]))
+    toate.sort(key=lambda a: a["data"], reverse=True)
+    raport["stiri"] = toate[:MAXIM_GLOBAL]
+
+    print(json.dumps(raport, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
