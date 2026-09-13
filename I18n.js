@@ -184,6 +184,7 @@ var TEXTE = {
 
     tipTop: "First item (Home)",
     tipMarkAll: "Mark all as read (a)",
+    tipReader: "Open the reader window (o)",
     tipBackToNews: "Back to news (s)",
     tipManageFeeds: "Manage feeds (s)",
     tipRefresh: "Reload (r)",
@@ -243,6 +244,7 @@ var TEXTE = {
 
     tipTop: "Prima știre (Home)",
     tipMarkAll: "Marchează toate ca citite (a)",
+    tipReader: "Deschide fereastra de citire (o)",
     tipBackToNews: "Înapoi la știri (s)",
     tipManageFeeds: "Administrează sursele (s)",
     tipRefresh: "Reîncarcă (r)",
@@ -302,6 +304,7 @@ var TEXTE = {
 
     tipTop: "Erster Beitrag (Home)",
     tipMarkAll: "Alle als gelesen markieren (a)",
+    tipReader: "Das Leserfenster öffnen (o)",
     tipBackToNews: "Zurück zu den Nachrichten (s)",
     tipManageFeeds: "Feeds verwalten (s)",
     tipRefresh: "Neu laden (r)",
@@ -361,6 +364,7 @@ var TEXTE = {
 
     tipTop: "Premier article (Home)",
     tipMarkAll: "Tout marquer comme lu (a)",
+    tipReader: "Ouvrir la fenêtre de lecture (o)",
     tipBackToNews: "Retour aux actualités (s)",
     tipManageFeeds: "Gérer les flux (s)",
     tipRefresh: "Recharger (r)",
@@ -420,6 +424,7 @@ var TEXTE = {
 
     tipTop: "Primera noticia (Home)",
     tipMarkAll: "Marcar todo como leído (a)",
+    tipReader: "Abrir la ventana de lectura (o)",
     tipBackToNews: "Volver a las noticias (s)",
     tipManageFeeds: "Gestionar las fuentes (s)",
     tipRefresh: "Recargar (r)",
@@ -479,6 +484,7 @@ var TEXTE = {
 
     tipTop: "Prima notizia (Home)",
     tipMarkAll: "Segna tutto come letto (a)",
+    tipReader: "Apri la finestra di lettura (o)",
     tipBackToNews: "Torna alle notizie (s)",
     tipManageFeeds: "Gestisci le fonti (s)",
     tipRefresh: "Ricarica (r)",
@@ -538,6 +544,7 @@ var TEXTE = {
 
     tipTop: "Primeira notícia (Home)",
     tipMarkAll: "Marcar tudo como lido (a)",
+    tipReader: "Abrir a janela de leitura (o)",
     tipBackToNews: "Voltar às notícias (s)",
     tipManageFeeds: "Gerenciar as fontes (s)",
     tipRefresh: "Recarregar (r)",
@@ -597,6 +604,7 @@ var TEXTE = {
 
     tipTop: "Pierwsza wiadomość (Home)",
     tipMarkAll: "Oznacz wszystko jako przeczytane (a)",
+    tipReader: "Otwórz okno czytania (o)",
     tipBackToNews: "Powrót do wiadomości (s)",
     tipManageFeeds: "Zarządzaj źródłami (s)",
     tipRefresh: "Odśwież (r)",
@@ -656,6 +664,7 @@ var TEXTE = {
 
     tipTop: "Первая новость (Home)",
     tipMarkAll: "Отметить всё прочитанным (a)",
+    tipReader: "Открыть окно чтения (o)",
     tipBackToNews: "Назад к новостям (s)",
     tipManageFeeds: "Управление источниками (s)",
     tipRefresh: "Обновить (r)",
@@ -715,6 +724,7 @@ var TEXTE = {
 
     tipTop: "第一条新闻（Home）",
     tipMarkAll: "全部标为已读（a）",
+    tipReader: "打开阅读窗口（o）",
     tipBackToNews: "返回新闻（s）",
     tipManageFeeds: "管理订阅源（s）",
     tipRefresh: "重新加载（r）",

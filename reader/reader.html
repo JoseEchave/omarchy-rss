@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>RSS Reader</title>
+<style>
+  :root {
+    --accent:#7aa2f7; --bg:#1a1b26; --bg2:#24283b; --fg:#a9b1d6;
+    --bright:#c0caf5; --muted:#414868; --sel:#292e42; --dark:#13141c;
+    --font:'JetBrainsMono NF','JetBrains Mono',ui-monospace,monospace;
+  }
+  * { box-sizing:border-box; }
+  html,body { margin:0; padding:0; }
+  body {
+    background:var(--bg); color:var(--fg);
+    font-family:var(--font); font-size:15px; line-height:1.6;
+  }
+  ::selection { background:var(--sel); color:var(--bright); }
+
+  /* ---------- top bar ---------- */
+  #bar {
+    position:fixed; top:0; left:0; right:0; height:44px; z-index:20;
+    display:flex; align-items:center; gap:14px; padding:0 18px;
+    background:color-mix(in srgb, var(--bg) 86%, transparent);
+    backdrop-filter:blur(8px); border-bottom:1px solid var(--bg2);
+    font-size:12.5px; color:var(--muted); user-select:none;
+  }
+  #bar .logo { color:var(--accent); font-weight:700; letter-spacing:.4px; }
+  #bar .logo .glyph { margin-right:7px; }
+  #count { margin-left:auto; }
+  #count b { color:var(--bright); font-weight:600; }
+  #feed { max-width:30ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #dot { width:7px; height:7px; border-radius:50%; background:var(--muted); flex:none; }
+  #dot.unread { background:var(--accent); }
+
+  /* ---------- article ---------- */
+  main {
+    max-width:76ch; margin:0 auto; padding:76px 26px 90px;
+  }
+  #src-pill {
+    display:inline-block; margin-bottom:14px; padding:3px 10px;
+    border:1px solid var(--bg2); border-radius:99px;
+    color:var(--accent); font-size:11.5px; letter-spacing:.4px; text-transform:uppercase;
+  }
+  h1 {
+    color:var(--bright); font-size:27px; line-height:1.3; font-weight:700;
+    margin:0 0 10px;
+  }
+  #meta { color:var(--muted); font-size:12.5px; margin-bottom:30px; }
+  #meta a { color:var(--muted); }
+
+  #content { font-size:15.5px; line-height:1.8; }
+  #content:empty::after {
+    content:"No article body in this feed item — press o to read it on the site.";
+    color:var(--muted); font-style:italic;
+  }
+  #content p { margin:.9em 0; }
+  #content img, #content video { max-width:100%; height:auto; border-radius:8px; }
+  #content iframe { max-width:100%; border:0; border-radius:8px; aspect-ratio:16/9; width:100%; }
+  #content a { color:var(--accent); text-decoration:none; }
+  #content a:hover { text-decoration:underline; }
+  #content blockquote {
+    margin:1.1em 0; padding:2px 0 2px 16px;
+    border-left:3px solid var(--accent); color:var(--bright);
+  }
+  #content h1,#content h2,#content h3,#content h4 {
+    color:var(--bright); line-height:1.35; margin:1.4em 0 .5em;
+  }
+  #content h1 { font-size:22px; } #content h2 { font-size:19px; } #content h3 { font-size:16.5px; }
+  #content pre {
+    background:var(--dark); border:1px solid var(--bg2); border-radius:8px;
+    padding:12px 14px; overflow-x:auto; font-size:13px;
+  }
+  #content code { background:var(--dark); border-radius:4px; padding:1px 5px; font-size:.9em; }
+  #content pre code { background:none; padding:0; }
+  #content table { display:block; overflow-x:auto; border-collapse:collapse; font-size:.92em; }
+  #content td,#content th { border:1px solid var(--bg2); padding:5px 9px; }
+  #content figure { margin:1.3em 0; }
+  #content figcaption { color:var(--muted); font-size:12.5px; margin-top:7px; }
+  #content hr { border:0; border-top:1px solid var(--bg2); margin:2em 0; }
+  #content mark {
+    background:color-mix(in srgb, var(--accent) 38%, transparent);
+    color:inherit; border-radius:3px; padding:1px 0; cursor:pointer;
+  }
+  #content mark:hover { background:color-mix(in srgb, var(--accent) 55%, transparent); }
+
+  /* ---------- caught up / loading ---------- */
+  #empty { display:none; text-align:center; margin-top:22vh; color:var(--muted); }
+  #empty .big { font-size:54px; color:var(--accent); }
+  #empty h2 { color:var(--bright); font-size:20px; margin:14px 0 6px; }
+  #busy {
+    display:none; position:fixed; inset:0; z-index:40;
+    background:color-mix(in srgb, var(--bg) 72%, transparent);
+    place-items:center; color:var(--bright); font-size:14px;
+  }
+  #busy .spin { font-size:34px; display:inline-block; animation:rot 1.1s linear infinite; }
+  @keyframes rot { to { transform:rotate(360deg); } }
+
+  /* ---------- highlight button ---------- */
+  #hlbtn {
+    display:none; position:fixed; z-index:30; padding:6px 12px;
+    background:var(--accent); color:var(--dark); border:0; border-radius:8px;
+    font-family:var(--font); font-size:12.5px; font-weight:700; cursor:pointer;
+    box-shadow:0 4px 18px rgba(0,0,0,.35);
+  }
+  #hlbtn kbd { background:color-mix(in srgb, var(--dark) 30%, transparent);
+    border-radius:4px; padding:0 5px; margin-left:6px; }
+
+  /* ---------- hints + help ---------- */
+  #hints {
+    position:fixed; bottom:0; left:0; right:0; z-index:20;
+    display:flex; justify-content:center; gap:20px; padding:8px 12px;
+    background:color-mix(in srgb, var(--bg) 86%, transparent);
+    backdrop-filter:blur(8px); border-top:1px solid var(--bg2);
+    color:var(--muted); font-size:11.5px; user-select:none;
+  }
+  #hints b { color:var(--bright); font-weight:600; }
+  #help {
+    display:none; position:fixed; inset:0; z-index:50;
+    background:color-mix(in srgb, var(--dark) 80%, transparent);
+    place-items:center;
+  }
+  #help .card {
+    background:var(--bg2); border:1px solid var(--muted); border-radius:14px;
+    padding:26px 34px; min-width:340px;
+  }
+  #help h3 { margin:0 0 14px; color:var(--bright); }
+  #help table { border-collapse:collapse; font-size:13px; }
+  #help td { padding:4px 12px 4px 0; }
+  #help td:first-child { color:var(--accent); font-weight:700; text-align:right; }
+</style>
+</head>
+<body>
+
+<div id="bar">
+  <span class="logo"><span class="glyph">󰗚</span>RSS Reader</span>
+  <span id="dot" title=""></span>
+  <span id="feed"></span>
+  <span id="count"></span>
+</div>
+
+<main>
+  <div id="empty">
+    <div class="big">󰗚</div>
+    <h2>All caught up</h2>
+    <div>no unread items — <b>r</b> refreshes the feeds</div>
+  </div>
+  <article id="art" style="display:none">
+    <span id="src-pill"></span>
+    <h1 id="title"></h1>
+    <div id="meta"></div>
+    <div id="content"></div>
+  </article>
+</main>
+
+<div id="busy"><div><span class="spin">󰑫</span>&nbsp; fetching feeds…</div></div>
+<button id="hlbtn">Highlight<kbd>h</kbd></button>
+
+<div id="hints">
+  <span><b>j</b> next</span><span><b>k</b> prev</span><span><b>h</b> highlight selection</span>
+  <span><b>right-click</b> mark to remove</span><span><b>o</b> browser</span>
+  <span><b>x</b> toggle read</span><span><b>u</b> show read</span><span><b>r</b> refresh</span>
+  <span><b>?</b> help</span>
+</div>
+
+<div id="help"><div class="card">
+  <h3>Keys</h3>
+  <table>
+    <tr><td>j / →</td><td>next item (marks it read)</td></tr>
+    <tr><td>k / ←</td><td>previous item</td></tr>
+    <tr><td>space</td><td>scroll · next at the end</td></tr>
+    <tr><td>h</td><td>highlight the selected text (saved as markdown)</td></tr>
+    <tr><td>right-click</td><td>remove a highlight</td></tr>
+    <tr><td>o</td><td>open the original in the browser</td></tr>
+    <tr><td>x</td><td>toggle read / unread</td></tr>
+    <tr><td>u</td><td>show read items too</td></tr>
+    <tr><td>r</td><td>refresh the feeds</td></tr>
+    <tr><td>?</td><td>this help</td></tr>
+  </table>
+</div></div>
+
+<script>
+'use strict';
+var st = { elemente: [], idx: -1, arataCitite: false, incarc: false };
+var $ = function (id) { return document.getElementById(id); };
+var content = $('content');
+
+/* ------------------------------------------------------------ theme */
+
+function aplicaTema(t) {
+  var r = document.documentElement.style;
+  r.setProperty('--accent', t.accent); r.setProperty('--bg', t.bg);
+  r.setProperty('--bg2', t.bg2);       r.setProperty('--fg', t.fg);
+  r.setProperty('--bright', t.bright); r.setProperty('--muted', t.muted);
+  r.setProperty('--sel', t.sel);       r.setProperty('--dark', t.dark);
+  if (t.font) r.setProperty('--font', "'" + t.font + "',monospace");
+}
+
+/* ------------------------------------------------------- text nodes */
+/* Everything highlight-related works on the concatenation of the content's
+   text nodes: selection offsets and stored highlight matches all live in that
+   one coordinate system. */
+
+function noduriText(radacina) {
+  var iesire = [], plimbare = document.createTreeWalker(
+    radacina, NodeFilter.SHOW_TEXT, {
+      acceptNode: function (n) {
+        var p = n.parentElement;
+        if (!p || p.closest('mark')) return NodeFilter.FILTER_REJECT;
+        return n.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+      }
+    });
+  while (plimbare.nextNode()) iesire.push(plimbare.currentNode);
+  return iesire;
+}
+
+function hartaText(radacina) {
+  var noduri = noduriText(radacina), bucati = [], harta = [], tot = 0;
+  for (var i = 0; i < noduri.length; i++) {
+    bucati.push(noduri[i].nodeValue);
+    harta.push({ nod: noduri[i], inceput: tot });
+    tot += noduri[i].nodeValue.length;
+  }
+  return { text: bucati.join(''), harta: harta, noduri: noduri };
+}
+
+function offsetAl(harta, nod, offset) {
+  for (var i = 0; i < harta.harta.length; i++) {
+    if (harta.harta[i].nod === nod) return harta.harta[i].inceput + offset;
+  }
+  return -1;
+}
+
+/* Wraps [start,end) of the concatenated text in <mark data-hid=hid>. */
+function marcheazaInterval(harta, start, end, hid) {
+  if (end <= start) return;
+  for (var i = 0; i < harta.harta.length; i++) {
+    var intrare = harta.harta[i];
+    var sfarsitNod = intrare.inceput + intrare.nod.nodeValue.length;
+    if (sfarsitNod <= start || intrare.inceput >= end) continue;
+
+    var nod = intrare.nod;
+    var localStart = Math.max(0, start - intrare.inceput);
+    var localEnd = Math.min(nod.nodeValue.length, end - intrare.inceput);
+
+    if (localEnd < nod.nodeValue.length) nod.splitText(localEnd);
+    if (localStart > 0) nod = nod.splitText(localStart);
+
+    var m = document.createElement('mark');
+    m.dataset.hid = hid;
+    nod.parentNode.insertBefore(m, nod);
+    m.appendChild(nod);
+  }
+}
+
+function demarcheaza(hid) {
+  content.querySelectorAll('mark[data-hid="' + hid + '"]').forEach(function (m) {
+    while (m.firstChild) m.parentNode.insertBefore(m.firstChild, m);
+    m.remove();
+  });
+  content.normalize();
+}
+
+/* Re-applies the stored highlights: exact text match, disambiguated by the
+   40-char prefix/suffix captured at highlight time. */
+function aplicaEvidenta(evidenta) {
+  for (var i = 0; i < evidenta.length; i++) {
+    var e = evidenta[i];
+    var harta = hartaText(content);
+    var text = e.text, cautare = harta.text, poz = -1, celMaiBun = -1, scorCelMaiBun = -1;
+    while ((poz = cautare.indexOf(text, poz + 1)) !== -1) {
+      var scor = 0;
+      if (e.prefix && harta.text.slice(Math.max(0, poz - e.prefix.length), poz) === e.prefix) scor += 2;
+      if (e.suffix && harta.text.slice(poz + text.length, poz + text.length + e.suffix.length) === e.suffix) scor += 2;
+      if (scor > scorCelMaiBun) { scorCelMaiBun = scor; celMaiBun = poz; }
+      if (scor === 4) break;
+    }
+    if (celMaiBun < 0) continue; // article body changed — highlight fades away
+    marcheazaInterval(harta, celMaiBun, celMaiBun + text.length, e.id);
+  }
+}
+
+/* --------------------------------------------------------- rendering */
+
+function varsta(secunde) {
+  if (!secunde) return '';
+  var d = Math.max(0, (Date.now() / 1000) - secunde), m = Math.floor(d / 60);
+  if (m < 1) return 'now';
+  if (m < 60) return m + ' min';
+  var h = Math.floor(m / 60);
+  if (h < 24) return h + ' h';
+  var z = Math.floor(h / 24);
+  return z + ' d';
+}
+
+function dataLunga(secunde) {
+  if (!secunde) return '';
+  try { return new Date(secunde * 1000).toLocaleDateString(undefined,
+    { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' }); }
+  catch (e) { return ''; }
+}
+
+function arata(idx) {
+  var e = st.elemente[idx];
+  if (!e) return;
+  st.idx = idx;
+  localStorage.setItem('rssReaderLast', e.id);
+
+  $('empty').style.display = 'none';
+  $('art').style.display = '';
+  $('src-pill').textContent = e.sursa || 'rss';
+  $('title').textContent = e.titlu;
+  $('feed').textContent = e.sursa || '';
+  var bucati = [];
+  if (e.data) bucati.push(dataLunga(e.data) + ' · ' + varsta(e.data) + ' ago');
+  if (e.link) bucati.push(e.link.replace(/^https?:\/\//, '').split('/')[0]);
+  $('meta').textContent = bucati.join(' · ');
+  $('dot').className = e.citit ? '' : 'unread';
+  $('dot').title = e.citit ? 'read' : 'unread';
+
+  content.innerHTML = e.continut || '';
+  content.scrollTop = 0;
+  window.scrollTo(0, 0);
+
+  var necitite = st.elemente.filter(function (x) { return !x.citit; }).length;
+  $('count').innerHTML = '<b>' + (idx + 1) + '</b> / ' + st.elemente.length +
+    (necitite ? ' · ' + necitite + ' unread' : '');
+
+  fetch('/api/highlights?id=' + encodeURIComponent(e.id))
+    .then(function (r) { return r.json(); })
+    .then(function (d) { aplicaEvidenta(d.evidenta || []); })
+    .catch(function () {});
+}
+
+function faraElemente() {
+  $('art').style.display = 'none';
+  $('empty').style.display = '';
+  $('count').textContent = '';
+  $('feed').textContent = '';
+  $('dot').className = '';
+}
+
+/* ------------------------------------------------------------ state */
+
+function incarca(force, apoi) {
+  if (st.incarc) return;
+  st.incarc = true;
+  $('busy').style.display = 'grid';
+  var url = '/api/state' + (st.arataCitite ? '?read=1' : '');
+  fetch(url).then(function (r) { return r.json(); }).then(function (d) {
+    if (d.tema) aplicaTema(d.tema);
+    st.elemente = d.elemente || [];
+    var start = 0;
+    if (force === true) {
+      start = Math.max(0, Math.min(st.idx < 0 ? 0 : st.idx, st.elemente.length - 1));
+    } else {
+      // ?start=<id> comes from the panel; otherwise resume where we stopped
+      var cautat = new URLSearchParams(location.search).get('start')
+        || localStorage.getItem('rssReaderLast');
+      for (var i = 0; cautat && i < st.elemente.length; i++) {
+        if (st.elemente[i].id === cautat) { start = i; break; }
+      }
+    }
+    if (st.elemente.length) arata(start); else faraElemente();
+    st.incarc = false;
+    $('busy').style.display = 'none';
+    if (apoi) apoi();
+  }).catch(function () {
+    st.incarc = false; $('busy').style.display = 'none';
+    $('busy').innerHTML = '<div>server unreachable — <b>rss</b> to restart</div>';
+  });
+}
+
+function marcheaza(e, citit) {
+  if (!e || !!e.citit === !!citit) return;
+  e.citit = citit;
+  fetch('/api/read', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: e.id, citit: citit })
+  }).catch(function () {});
+  if (st.idx === st.elemente.indexOf(e)) {
+    $('dot').className = citit ? '' : 'unread';
+  }
+}
+
+function urmatore(dir) {
+  var urm = st.idx + dir;
+  if (urm < 0 || urm >= st.elemente.length) {
+    if (urm >= st.elemente.length && st.elemente.length &&
+        st.elemente.filter(function (x) { return !x.citit; }).length === 0) {
+      faraElemente(); // finished the queue
+    }
+    return;
+  }
+  var curent = st.elemente[st.idx];
+  if (dir > 0 && curent && !curent.citit) marcheaza(curent, true);
+  arata(urm);
+}
+
+/* ------------------------------------------------------- highlighting */
+
+var hlbtn = $('hlbtn'), selectieCurenta = null;
+
+function pozitioneazaButonul(x, y) {
+  hlbtn.style.display = 'block';
+  hlbtn.style.left = Math.min(x, window.innerWidth - 150) + 'px';
+  hlbtn.style.top = Math.max(52, y - 44) + 'px';
+}
+
+document.addEventListener('mouseup', function (ev) {
+  if (ev.target === hlbtn || hlbtn.contains(ev.target)) return;
+  setTimeout(function () {
+    var sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !content.contains(sel.anchorNode)) {
+      hlbtn.style.display = 'none'; selectieCurenta = null; return;
+    }
+    selectieCurenta = sel.getRangeAt(0).cloneRange();
+    pozitioneazaButonul(ev.clientX, ev.clientY);
+  }, 10);
+});
+
+function faEvidenta() {
+  var sel = window.getSelection();
+  if ((!sel || sel.isCollapsed) && !selectieCurenta) return;
+  hlbtn.style.display = 'none';
+
+  var harta = hartaText(content);
+  var range = selectieCurenta || sel.getRangeAt(0);
+  var start = offsetAl(harta, range.startContainer, range.startOffset);
+  var end = offsetAl(harta, range.endContainer, range.endOffset);
+  selectieCurenta = null;
+  if (start < 0 || end <= start) return;
+
+  // trim whitespace without leaving the coordinate system
+  while (start < end && /\s/.test(harta.text[start])) start++;
+  while (end > start && /\s/.test(harta.text[end - 1])) end--;
+  if (end - start < 2) return;
+
+  var text = harta.text.slice(start, end);
+  var prefix = harta.text.slice(Math.max(0, start - 40), start);
+  var suffix = harta.text.slice(end, end + 40);
+  var e = st.elemente[st.idx];
+
+  // provisional mark, so the feedback is instant
+  marcheazaInterval(harta, start, end, 'pending');
+  if (sel && sel.removeAllRanges) sel.removeAllRanges();
+
+  fetch('/api/highlight', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: e.id, text: text, prefix: prefix, suffix: suffix,
+      titlu: e.titlu, sursa: e.sursa, link: e.link, data: e.data })
+  }).then(function (r) { return r.json(); }).then(function (d) {
+    var ultimul = (d.evidenta || [])[d.evidenta.length - 1];
+    if (!ultimul) { demarcheaza('pending'); return; }
+    // swap the provisional id for the real one
+    content.querySelectorAll('mark[data-hid="pending"]').forEach(function (m) {
+      m.dataset.hid = ultimul.id;
+    });
+  }).catch(function () { demarcheaza('pending'); });
+}
+
+hlbtn.addEventListener('click', faEvidenta);
+
+// right-click a highlight removes it
+content.addEventListener('contextmenu', function (ev) {
+  var m = ev.target.closest && ev.target.closest('mark');
+  if (!m || !m.dataset.hid || m.dataset.hid === 'pending') return;
+  ev.preventDefault();
+  var hid = m.dataset.hid;
+  var e = st.elemente[st.idx];
+  fetch('/api/unhighlight', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: e.id, hid: hid })
+  }).then(function (r) { return r.json(); })
+    .then(function () { demarcheaza(hid); })
+    .catch(function () {});
+});
+
+/* ------------------------------------------------------------- keys */
+
+document.addEventListener('keydown', function (ev) {
+  if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  if (ev.target && (ev.target.tagName === 'INPUT' || ev.target.tagName === 'TEXTAREA')) return;
+  var k = ev.key;
+
+  if (k === '?' || (k === '/' && ev.shiftKey)) {
+    var h = $('help');
+    h.style.display = h.style.display === 'grid' ? 'none' : 'grid';
+    ev.preventDefault(); return;
+  }
+  if ($('help').style.display === 'grid') { $('help').style.display = 'none'; return; }
+
+  if (k === 'j' || k === 'ArrowRight' || k === 'n') { ev.preventDefault(); urmatore(1); }
+  else if (k === 'k' || k === 'ArrowLeft' || k === 'p') { ev.preventDefault(); urmatore(-1); }
+  else if (k === ' ') {
+    ev.preventDefault();
+    if (window.innerHeight + window.scrollY >= document.body.scrollHeight - 4) urmatore(1);
+    else window.scrollBy({ top: window.innerHeight * 0.82, behavior: 'smooth' });
+  }
+  else if (k === 'h') { ev.preventDefault(); faEvidenta(); }
+  else if (k === 'o') {
+    var e = st.elemente[st.idx];
+    if (e && e.link) { marcheaza(e, true); window.open(e.link, '_blank'); }
+  }
+  else if (k === 'x') {
+    var c = st.elemente[st.idx];
+    if (c) marcheaza(c, !c.citit);
+  }
+  else if (k === 'u') {
+    st.arataCitite = !st.arataCitite;
+    localStorage.setItem('rssReaderShowRead', st.arataCitite ? '1' : '');
+    incarca(true);
+  }
+  else if (k === 'r' || k === 'R') {
+    $('busy').innerHTML = '<div><span class="spin">󰑫</span>&nbsp; fetching feeds…</div>';
+    $('busy').style.display = 'grid';
+    fetch('/api/refresh', { method: 'POST' })
+      .then(function () { st.idx = -1; localStorage.removeItem('rssReaderLast'); incarca(); })
+      .catch(function () { $('busy').style.display = 'none'; });
+  }
+});
+
+/* ------------------------------------------------------------ start */
+
+st.arataCitite = localStorage.getItem('rssReaderShowRead') === '1';
+incarca();
+window.addEventListener('focus', function () {
+  // items read in the panel meanwhile should not resurface as unread here
+  if (!st.incarc) fetch('/api/state').then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d.elemente) return;
+      var vechi = st.elemente[st.idx] && st.elemente[st.idx].id;
+      st.elemente = d.elemente;
+      var idx = 0;
+      for (var i = 0; i < st.elemente.length; i++) {
+        if (st.elemente[i].id === vechi) { idx = i; break; }
+      }
+      if (st.elemente.length) arata(idx); else faraElemente();
+    }).catch(function () {});
+});
+</script>
+</body>
+</html>

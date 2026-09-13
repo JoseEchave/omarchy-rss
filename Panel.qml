@@ -74,6 +74,10 @@ Panel {
   readonly property string dosarStare: acasa + "/.local/state/omarchy"
   readonly property string caleCitite: dosarStare + "/rss.json"
   readonly property string caleScript: String(Qt.resolvedUrl("bin/rss-preia")).replace(/^file:\/\//, "")
+  // Cititorul în fereastră e tot al plugin-ului (bin/rss-reader): o singură
+  // dată trăiește fiecare parte a lui în dosarul lui. Comanda `rss` din
+  // ~/.local/bin e doar o punte pe PATH către același script.
+  readonly property string caleCititor: String(Qt.resolvedUrl("bin/rss-reader")).replace(/^file:\/\//, "")
 
   // Prima rulare: fișierul cu surse nu există încă, deci widget-ul nu ar avea
   // ce arăta — panoul s-ar deschide direct pe formularul de adăugare și ar cere
@@ -192,6 +196,14 @@ Panel {
       // vim-style la dreapta și consumă evenimentul, deci minuscula nu ajunge
       // niciodată până aici.
       root.cicleazaLimba()
+    } else if (text === "o") {
+      // Cu cursorul pe o știre: aceea deschide cititorul; fără cursor: coada
+      // pornește normal, de la prima necitită.
+      if (root.indexSelectat >= 0 && root.indexSelectat < stiriAfisate.length) {
+        root.deschideInCititor(stiriAfisate[root.indexSelectat])
+      } else {
+        root.deschideCititorul("")
+      }
     } else if (text === "n" && root.vedereSurse) {
       // Tab e deja luat de comutarea între panourile barei, deci câmpul de
       // adăugare are nevoie de o tastă a lui ca să fie accesibil fără mouse.
@@ -275,6 +287,19 @@ Panel {
 
     Util.execArgv(["omarchy-launch-browser", link])
     root.marcheazaCitit(stire.id)
+  }
+
+  // Aceeași știre, dar în fereastra de citire (`rss open <id>`): coada
+  // pornește de la ea, cu articolul întreg și cu evidențierea la îndemână.
+  function deschideInCititor(stire) {
+    if (!stire || Model.linkWeb(stire.link) === "") {
+      return
+    }
+    root.deschideCititorul(stire.id)
+  }
+
+  function deschideCititorul(id) {
+    Util.execArgv([root.caleCititor, "open"].concat(id ? [String(id)] : []))
   }
 
   // ------------------------------------------------------------- citirile
@@ -454,13 +479,17 @@ Panel {
   FileView {
     id: fisierCitite
     path: root.caleCitite
-    watchChanges: false
+    // Fișierul nu mai e doar al widget-ului: cititorul în fereastră (`rss`)
+    // scrie în el când avansezi peste un articol, iar numărul din bară trebuie
+    // să scadă la fel de live cum o face și panoul.
+    watchChanges: true
     atomicWrites: true
     printErrors: false
     onLoaded: root.incarcaCititele(text())
     // Prima rulare: fișierul încă nu există. Fără ramura asta „cititeIncarcate”
     // ar rămâne false pentru totdeauna și nu s-ar salva niciodată nimic.
     onLoadFailed: root.incarcaCititele("")
+    onFileChanged: reload()
   }
 
   function incarcaSursele(brut) {
@@ -494,11 +523,20 @@ Panel {
   }
 
   function incarcaCititele(brut) {
+    var cititeNoi = Model.curataCitite(Model.parseazaCitite(brut), root.zileDePastrat, root.limitaCitite)
+
     if (root.cititeIncarcate) {
+      // Reîncărcare de pe disc: cineva altcineva (cititorul în fereastră) a
+      // scris între timp. Egalitatea lasă să treacă ecoul propriei noastre
+      // scrieri, care altfel ar mătura selecția din panou de fiecare dată.
+      if (JSON.stringify(cititeNoi) === JSON.stringify(root.citite)) {
+        return
+      }
+      root.citite = cititeNoi
       return
     }
 
-    root.citite = Model.curataCitite(Model.parseazaCitite(brut), root.zileDePastrat, root.limitaCitite)
+    root.citite = cititeNoi
     root.cititeIncarcate = true
   }
 
@@ -585,6 +623,14 @@ Panel {
     function show(): void { root.open() }
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
+
+    // Fereastra de citire, ca și cum ai apăsa butonul ei din panou. Scriptul
+    // (`rss open`) decide singur: pornește serverul dacă nu e pornit, concentrează
+    // fereastra dacă e deja deschisă.
+    function reader(): string {
+      root.deschideCititorul("")
+      return "ok"
+    }
 
     function refresh(): string {
       root.actualizeaza()
@@ -849,6 +895,15 @@ Panel {
               enabled: root.stiriAfisate.length > 0
                 && (!listaStiri.atYBeginning || root.indexSelectat > 0)
               onClicked: root.duLaPrimaStire()
+            }
+
+            ButonAntet {
+              iconText: "󰗚"
+              tooltipText: I18n.t(root.limba, "tipReader")
+              onClicked: root.deschideCititorul(
+                !root.vedereSurse && root.indexSelectat >= 0
+                  && root.indexSelectat < stiriAfisate.length
+                  ? stiriAfisate[root.indexSelectat].id : "")
             }
 
             ButonAntet {

@@ -1,0 +1,77 @@
+#!/bin/bash
+# rss — reader window for the RSS news bar widget, fino style.
+#
+# The bar panel lists headlines; this opens the same feeds as a proper reading
+# window: one unread item at a time, full article text, omarchy theme colors —
+# and text selection you can highlight; highlights land as markdown files in
+# ~/Documents/RSS Highlights (override with RSS_HIGHLIGHTS_DIR).
+#
+# Usage:
+#   rss            open/focus the reader (queue starts at the first unread)
+#   rss open <id>  open/focus, jumping to a specific item id (used by the panel)
+#   rss stop       stop the local server
+#   rss serve      internal: the local server (started on demand)
+#
+# Keys inside the reader:
+#   j next · k prev · h highlight selection · right-click a mark to remove it
+#   o open in browser · x toggle read · u show read · r refresh · ? help
+#
+# The server (reader/server.py, port 7788 by default, RSS_READER_PORT to
+# change) is the only thing that touches the network: it runs the widget's own
+# bin/rss-preia and sanitizes article HTML before the page ever sees it.
+
+set -u
+
+DIR="$HOME/.config/omarchy/plugins/mghizdavet.rss/reader"
+SERVER="$DIR/server.py"
+PORT="${RSS_READER_PORT:-7788}"
+ADDR="http://127.0.0.1:$PORT/reader.html"
+RUNTIME="${XDG_RUNTIME_DIR:-/run/user/$UID}"
+
+server_port() { # port of a healthy rss server, if one is up
+  local p
+  for p in "$(cat "$RUNTIME/rss-reader.port" 2>/dev/null)" "$(cat "$DIR/.port" 2>/dev/null)"; do
+    [[ $p =~ ^[0-9]+$ ]] || continue
+    if curl -sf --max-time 1 "http://127.0.0.1:$p/ping" 2>/dev/null | grep -q rss-reader; then
+      echo "$p"
+      return 0
+    fi
+  done
+  return 1
+}
+
+ensure_server() { # start server.py unless a healthy one answers
+  server_port && return 0
+  RSS_READER_PORT="$PORT" setsid python3 "$SERVER" >/dev/null 2>&1 &
+  local i
+  for i in $(seq 1 30); do # ~3s max
+    sleep 0.1
+    server_port && return 0
+  done
+  return 1
+}
+
+case "${1:-open}" in
+  open|o|"")
+    id="${2:-}"
+    if ! port=$(server_port); then
+      ensure_server >/dev/null 2>&1 || { echo "rss: server did not come up" >&2; exit 1; }
+      port=$(server_port)
+    fi
+    url="http://127.0.0.1:$port/reader.html"
+    [[ -n $id ]] && url="$url?start=$(printf %s "$id" | sed 's/[^0-9a-f]//g')"
+    # focus if the window is already open; ?start only applies on first load
+    exec omarchy-launch-or-focus-webapp "RSS Reader" "$url"
+    ;;
+  serve|s)
+    exec python3 "$SERVER"
+    ;;
+  stop|t)
+    pkill -f "reader/server.py" 2>/dev/null
+    rm -f "$RUNTIME/rss-reader.port" "$DIR/.port"
+    ;;
+  *)
+    echo "usage: rss [open [item-id] | stop | serve]" >&2
+    exit 1
+    ;;
+esac

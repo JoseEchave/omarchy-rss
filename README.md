@@ -18,6 +18,79 @@ The interface speaks 10 languages and follows your system locale by default.
 - marks everything read from a single button;
 - adds and removes feeds from the panel, without editing files.
 
+> **This is a fork** ([JoseEchave/omarchy-rss](https://github.com/JoseEchave/omarchy-rss))
+> with two additions on top of the original widget: a **full-article reader
+> window** (so reading no longer means bouncing to the browser) and **text
+> highlighting that saves as markdown**. The original widget below is otherwise
+> unchanged.
+
+## The reader window (fork)
+
+Reading the queue happens in a proper reading window, in the style of the Fino
+reader: one unread item at a time, full article text from the feed (sanitized
+on a local server before the page ever sees it), theme colors synced from your
+current omarchy theme. The bar count drops as you advance — the window writes
+the same read-state file the widget uses.
+
+| Action | How |
+|---|---|
+| Open / focus the reader | `SUPER + ALT + R`, or `rss`, or Omarchy menu → *RSS reader* |
+| Open the item under the cursor | panel: `o`, or the 󰗚 button in the panel header |
+| Next / previous | `j` / `k` (or arrows; `space` scrolls, next at the end) |
+| Highlight the selected text | select with the mouse, then `h` or the floating **Highlight** button |
+| Remove a highlight | right-click it |
+| Open the original in the browser | `o` |
+| Toggle read / unread | `x` |
+| Show read items too | `u` |
+| Refresh feeds | `r` |
+| Keys overview | `?` |
+| IPC | `omarchy-shell rss reader` |
+
+Advancing past an item marks it read (in the widget's own
+`~/.local/state/omarchy/rss.json`, so the count in the bar follows along).
+
+### Highlights as markdown
+
+Select any passage and press `h`: it is wrapped in the page and saved to
+`~/Documents/RSS Highlights` (override with `RSS_HIGHLIGHTS_DIR`). One markdown
+file per article — YAML front matter plus the highlights as blockquotes — and
+an `index.md` linking every article you have highlighted:
+
+```md
+---
+title: "Evals for Everyone"
+feed: "Every"
+link: "https://every.to/ai-evals"
+published: "2026-09-10"
+highlighted: "2026-09-13 17:01"
+---
+
+# Evals for Everyone
+
+## Highlights
+
+> evals are the compass, not the map
+```
+
+Removing the last highlight of an article removes its file; the store of
+highlights lives in `~/.local/state/omarchy/rss-highlights.json`.
+
+### How the window works
+
+- `reader/server.py` serves the page on `127.0.0.1:7788` (`RSS_READER_PORT` to
+  change) and is the only piece that touches the network: it runs the widget's
+  own `bin/rss-preia` (with a new opt-in full-content flag), sanitizes the
+  article HTML against a whitelist (YouTube embeds are the only iframes let
+  through), serves the local thumbnails, owns the read-state and highlight
+  writes, and re-reads the omarchy theme on every request — a theme change is
+  picked up on the next load, no restart.
+- `reader/reader.html` is the single-page reader itself; `bin/rss-reader` is
+  the launcher (`open` / `stop` / `serve`), also on `PATH` as `rss` via
+  `~/.local/bin/rss`. The window reuses your running browser as an app window,
+  like Fino does.
+- `rss stop` stops the server; closing the window leaves it running so the
+  next open is instant.
+
 ## Install
 
 ```bash
@@ -49,6 +122,8 @@ so uninstalling never loses your feed list:
 ```bash
 rm -rf ~/.config/omarchy/rss        # your feed list
 rm -f  ~/.local/state/omarchy/rss.json   # which items you have read
+rm -rf ~/Documents/"RSS Highlights"      # the exported markdown (the fork's)
+rm -f  ~/.local/state/omarchy/rss-highlights.json  # the highlights store (the fork's)
 ```
 
 Nothing else in your configuration is written. The one line the plugin adds to
@@ -67,6 +142,7 @@ only that entry's `language` key, through the shell's own `setBarWidget` call.
 | panel | right click an item | toggle read / unread |
 | panel | `j` / `k`, arrows | move the cursor through the list |
 | panel | `Enter` / `Space` | open the item under the cursor |
+| panel | `o` | open the item under the cursor in the reader window |
 | panel | `x` | mark read (in the feed view: remove the feed) |
 | panel | `g` or `Home` | jump to the first item |
 | panel | `a` | mark everything read |
@@ -166,6 +242,7 @@ regenerable state: entries older than 90 days clean themselves up.
 
 ```bash
 omarchy-shell rss toggle
+omarchy-shell rss reader
 omarchy-shell rss unread
 omarchy-shell rss status
 omarchy-shell rss refresh
